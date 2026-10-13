@@ -29,7 +29,7 @@ function page() {
   const window = {
     fetch: async (input) => new Response(`echo ${input instanceof Request ? input.url : input}`, { status: 200, headers: { "x-test": "1" } }),
   };
-  const context = vm.createContext({ window, XMLHttpRequest: FakeXHR, Request, Response, Headers, URLSearchParams, Date, Object, String });
+  const context = vm.createContext({ window, XMLHttpRequest: FakeXHR, Request, Response, Headers, URL, URLSearchParams, Date, Object, String, location: { href: "https://example.test/" } });
   vm.runInContext(script, context);
   return { window, context };
 }
@@ -65,10 +65,10 @@ test("XHR: method, set headers, body and response", () => {
   const { window, context } = page();
   const xhr = new context.XMLHttpRequest();
   xhr.open("post", "https://example.test/x");
-  xhr.setRequestHeader("X-Csrf", "t");
+  xhr.setRequestHeader("X-Request-Id", "t");
   xhr.send("a=1");
   const [entry] = window.__mcp_network;
-  assert.deepEqual([entry.method, entry.requestHeaders["X-Csrf"], entry.requestBody, entry.status, entry.responseBody], ["POST", "t", "a=1", 201, '{"ok":true}']);
+  assert.deepEqual([entry.method, entry.requestHeaders["X-Request-Id"], entry.requestBody, entry.status, entry.responseBody], ["POST", "t", "a=1", 201, '{"ok":true}']);
 });
 
 test("starting twice wraps fetch once", async () => {
@@ -76,4 +76,27 @@ test("starting twice wraps fetch once", async () => {
   vm.runInContext(script, context);
   await window.fetch("https://example.test/once");
   assert.equal(window.__mcp_network.length, 1);
+});
+
+test("auth values are never kept: header values and token-carrying URL parameters are redacted, their names kept", async () => {
+  const { window, context } = page();
+  await window.fetch("https://example.test/sso/login?id_token=eyJabc&next=%2Fhome", {
+    method: "POST", headers: { Authorization: "Bearer secret", "X-CSRF-Token": "t1", "content-type": "application/json" }, body: "{}",
+  });
+  const xhr = new context.XMLHttpRequest();
+  xhr.open("GET", "https://example.test/api?session=s1&page=2");
+  xhr.setRequestHeader("Cookie", "a=b");
+  xhr.send(null);
+  await settle();
+  const [f, x] = window.__mcp_network;
+  assert.equal(f.requestHeaders.authorization, "<redacted>");
+  assert.equal(f.requestHeaders["x-csrf-token"], "<redacted>");
+  assert.equal(f.requestHeaders["content-type"], "application/json");
+  assert.match(f.url, /id_token=%3Credacted%3E/);
+  assert.match(f.url, /next=%2Fhome/);
+  assert.equal(x.requestHeaders.Cookie, "<redacted>");
+  assert.match(x.url, /session=%3Credacted%3E&page=2/);
+  // The request side (a response body is kept as it is, and this fake server echoes the URL back)
+  const sent = window.__mcp_network.map((e) => ({ url: e.url, headers: e.requestHeaders, body: e.requestBody }));
+  assert.ok(!JSON.stringify(sent).match(/secret|eyJabc|\bt1\b|a=b|s1/));
 });

@@ -31,6 +31,12 @@ too, so it ends on a full page load. Tests: `test/page-recorder.test.mjs`. `safa
 `test/automation.test.mjs`) that rinkagu's `bin/safari-auto` replays. While recording or capturing network, the page
 shows a small badge saying so (`pageIndicator` in `page-recorder.js`).
 
+A recording captures the page's requests too unless started with `network: false`, and `safari_get_recording` ties
+each request to the step that set it off (`linkRecording` in `automation.js`), folding polling into `background`; the
+export's review points out a step that made a write, as one an API command could do. The network capture keeps no
+auth values: header values like `authorization`, `cookie` and csrf tokens, and URL parameters like `id_token`, are
+`<redacted>`, names kept.
+
 The recording and network tools send their scripts through the extension's `evaluate` (like `safari_evaluate`), so
 they act on the session's tab, an adopted one included. Upstream's network tools used `runJS`, AppleScript's
 `do JavaScript`, which only reaches the profile window's front tab; it's kept as their fallback.

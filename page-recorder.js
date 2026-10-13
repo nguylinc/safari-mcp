@@ -8,9 +8,12 @@
 // capture, it lives in the page: a full load ends it, in-app navigation doesn't. A password field's value is never
 // kept, and nothing is recorded until the recorder is started, or after it's stopped.
 
-export function pageRecorder(command) {
+// `network`: the page's requests are being captured with it (safari.js installs the network capture first), so the
+// badge counts them on the recording's line, in place of the capture's own.
+export function pageRecorder(command, options) {
   const w = window;
   const doc = document;
+  const network = !!(options && options.network);
   if (command === "stop") {
     if (!w.__mcp_recording) return "not recording";
     w.__mcp_recording.stop();
@@ -22,13 +25,23 @@ export function pageRecorder(command) {
   const started = Date.now();
   const steps = w.__mcp_recording && w.__mcp_recording.steps ? w.__mcp_recording.steps : [];
   const cleanups = [];
-  const badge = (text) => { if (w.__mcp_setIndicator) w.__mcp_setIndicator("recording", text); };
-  const rec = { active: true, steps, started: new Date(started).toISOString(), stop() {
+  const startedIso = new Date(started).toISOString();
+  const requestCount = () => (w.__mcp_network || []).filter((r) => r.time >= startedIso).length;
+  const setLine = (key, text) => { if (w.__mcp_setIndicator) w.__mcp_setIndicator(key, text); };
+  const rec = { active: true, network, steps, started: startedIso, stop() {
     rec.active = false;
     for (const undo of cleanups.splice(0)) undo();
-    badge(null);
+    setLine("recording", null);
+    // The capture keeps going after the recording stops (it has no stop): its own line says so again.
+    if (network && w.__mcp_network) setLine("network", () => `● Capturing network · ${(w.__mcp_network || []).length} requests`);
   } };
   w.__mcp_recording = rec;
+  if (network) setLine("network", null);
+  const recordingLine = () => {
+    const n = steps.filter((s) => s.type !== "start").length;
+    return `● Recording · ${n} step${n === 1 ? "" : "s"}${network ? ` · ${requestCount()} request${requestCount() === 1 ? "" : "s"}` : ""}`;
+  };
+  setLine("recording", recordingLine);
 
   const css = (s) => (w.CSS && w.CSS.escape ? w.CSS.escape(s) : String(s).replace(/["\\]/g, "\\$&"));
   const quoted = (s) => `"${String(s).replace(/["\\]/g, "\\$&")}"`;
@@ -214,7 +227,7 @@ export function pageRecorder(command) {
     step.url = w.location.href;
     steps.push(step);
     if (steps.length > MAX_STEPS) steps.shift();
-    badge(`● Recording · ${steps.filter((s) => s.type !== "start").length} steps`);
+    setLine("recording", recordingLine); // redrawn now, not at the next second
     return step;
   };
   // The indicator badge isn't part of the page: what's done to it isn't recorded.
@@ -344,22 +357,32 @@ export function pageRecorder(command) {
   return "recording clicks, typing, keys, selects, submits, scrolls and in-app navigation";
 }
 
-// The page's indicator badge: a small pill in the bottom-right corner, one line per thing watching the page
-// ("● Recording · 12 steps", "● Capturing network"), so the user can see an agent is recording in their tab. Installs
-// window.__mcp_setIndicator(key, text); a null text removes that line, and the badge goes with the last one. It's in
-// its own shadow root (the page's styles can't reach it) and lets every click through.
+// The page's indicator badge: a small pill in the bottom-right corner saying what's watching the page
+// ("● Recording · 12 steps · 5 requests", "● Capturing network · 5 requests"), so the user can see an agent is
+// recording in their tab. Installs window.__mcp_setIndicator(key, text); `text` is a string or a function giving one
+// (re-read each second, so counts keep up), null removes that line, and the badge goes with the last one. Lines stack.
+// It's in its own shadow root (the page's styles can't reach it) and lets every click through.
 export function pageIndicator() {
+  // Its version, inline: this function runs serialized in the page, where nothing outside it exists.
+  const VERSION = 2;
   const w = window;
-  if (w.__mcp_setIndicator) return;
+  if (w.__mcp_setIndicator && w.__mcp_setIndicator.version === VERSION) return;
+  const old = w.document.getElementById("__mcp_indicator");
+  if (old) old.remove(); // an earlier version's badge
   const lines = new Map();
   let host = null;
   let box = null;
+  let timer = null;
+  const textOf = (v) => { try { return typeof v === "function" ? v() : v; } catch { return ""; } };
   const render = () => {
     if (!lines.size) {
       if (host) host.remove();
       host = box = null;
+      if (timer) clearInterval(timer);
+      timer = null;
       return;
     }
+    if (!timer && [...lines.values()].some((v) => typeof v === "function")) timer = setInterval(render, 1000);
     if (!host || !host.isConnected) {
       host = document.createElement("div");
       host.id = "__mcp_indicator";
@@ -371,11 +394,16 @@ export function pageIndicator() {
       root.appendChild(box);
       (document.body || document.documentElement).appendChild(host);
     }
-    box.textContent = [...lines.values()].join("   ");
+    box.replaceChildren(...[...lines.values()].map((v) => {
+      const line = document.createElement("div");
+      line.textContent = textOf(v);
+      return line;
+    }));
   };
   w.__mcp_setIndicator = (key, text) => {
     if (text) lines.set(key, text);
     else lines.delete(key);
     render();
   };
+  w.__mcp_setIndicator.version = VERSION;
 }

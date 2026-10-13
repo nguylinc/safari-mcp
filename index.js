@@ -11,7 +11,7 @@ import { startTransport } from "./transport.js";
 import { currentSessionId } from "./session-context.js";
 import { z } from "zod";
 import * as safari from "./safari.js";
-import { recordingToAutomation } from "./automation.js";
+import { linkRecording, recordingToAutomation } from "./automation.js";
 import { textResult, jsonResult, imageResult, errorResult, evalResult } from "./response.js";
 import {
   OWNERSHIP_DIR, BLANK_TAB_SENTINEL,
@@ -4444,17 +4444,21 @@ server.tool(
 
 server.tool(
   "safari_start_recording",
-  "Start recording what the USER does in this tab, to learn and automate it: clicks, double and right clicks, typing (one fill per field), special keys and shortcuts, selects, checkboxes, submits, scrolls and in-app navigation. Each step gets a selector (test id, id, role and name, label or placeholder, text, CSS path) and the safari-mcp call that does it again. Password values are never kept. Lives in the page: a full page load ends it. Read it with safari_get_recording.",
-  { receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)") },
+  "Start recording what the USER does in this tab, to learn and automate it: clicks, double and right clicks, typing (one fill per field), special keys and shortcuts, selects, checkboxes, submits, scrolls and in-app navigation, and (unless network is false) the page's own fetch/XHR requests, each tied to the step that set it off. Each step gets a selector (test id, id, role and name, label or placeholder, text, CSS path) and the safari-mcp call that does it again. Password values and auth header values are never kept. Lives in the page: a full page load ends it. Read it with safari_get_recording.",
+  {
+    receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)"),
+    network: z.boolean().optional().describe("Also capture the page's requests (default: true)"),
+  },
   // Through the extension's evaluate, like safari_evaluate, so it runs in the session's tab (an adopted one
   // included); runJS, the fallback, reaches only the window's front tab.
   async (args) => evalResult(await extensionOrFallback(
-    "evaluate", { script: safari.recorderScript(), ..._explicitReceipt(args) }, () => safari.startRecording()))
+    "evaluate", { script: safari.recorderScript(undefined, { network: args.network !== false }), ..._explicitReceipt(args) },
+    () => safari.startRecording({ network: args.network !== false })))
 );
 
 server.tool(
   "safari_get_recording",
-  "Get the steps safari_start_recording has recorded: each with its type, selector, role, name, value and the safari-mcp `tool` call that replays it.",
+  "Get what safari_start_recording has recorded: the steps, each with its type, selector, role, name, value, the safari-mcp `tool` call that replays it and the `requests` it set off; and `background`, the requests no step made (polling folded into one summary per endpoint). Request bodies can hold tokens: don't echo them.",
   {
     receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)"),
     limit: z.coerce.number().optional().describe("Max steps, the latest (default: 200)"),
@@ -4467,8 +4471,13 @@ server.tool(
     const raw = await extensionOrFallback(
       "evaluate", { script: safari.recordingReadScript({ ...args, limit: args.format === "automation" ? 2000 : args.limit }),
         ..._explicitReceipt(args) }, () => safari.getRecording(args));
-    if (args.format !== "automation") return evalResult(raw);
-    const recording = typeof raw === "string" ? JSON.parse(raw) : raw;
+    let recording;
+    try {
+      recording = typeof raw === "string" ? JSON.parse(raw) : raw;
+    } catch {
+      return evalResult(raw); // not the recording's JSON (an error from the page): as it came
+    }
+    if (args.format !== "automation") return textResult(JSON.stringify(linkRecording(recording), null, 2));
     return textResult(JSON.stringify(recordingToAutomation(recording, { name: args.name, server: args.server }), null, 2));
   }
 );

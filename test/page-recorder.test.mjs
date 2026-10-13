@@ -121,9 +121,28 @@ test("the badge shows the step count, isn't recorded itself, and goes when recor
   click(document.querySelector("button"));
   const host = document.getElementById("__mcp_indicator");
   assert.ok(host, "the badge is on the page");
-  assert.match(host.shadowRoot.textContent, /Recording · 1 steps/);
+  assert.match(host.shadowRoot.textContent, /Recording · 1 step$/);
   click(host);
   assert.equal(window.__mcp_recording.steps.filter((s) => s.type === "click").length, 1);
   pageRecorder("stop");
   assert.equal(document.getElementById("__mcp_indicator"), null);
+});
+
+test("recording with the network: one line counting steps and the requests since it started, in place of the capture's", async () => {
+  const dom = new JSDOM(`<!doctype html><body><button>Go</button></body>`, { url: "https://example.test/", pretendToBeVisual: true });
+  globalThis.window = dom.window;
+  globalThis.document = dom.window.document;
+  const { pageIndicator } = await import("../page-recorder.js");
+  pageIndicator();
+  window.__mcp_network = [{ time: "2000-01-01T00:00:00.000Z", url: "https://example.test/old" }];
+  window.__mcp_setIndicator("network", () => "● Capturing network · 1 requests");
+  pageRecorder(undefined, { network: true });
+  window.__mcp_network.push({ time: new Date(Date.now() + 5).toISOString(), url: "https://example.test/api" });
+  document.querySelector("button").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, button: 0, detail: 1 }));
+  const box = document.getElementById("__mcp_indicator").shadowRoot.textContent;
+  assert.equal(box, "● Recording · 1 step · 1 request", "one line, only the request made since it started");
+  pageRecorder("stop");
+  assert.match(document.getElementById("__mcp_indicator").shadowRoot.textContent, /^● Capturing network · 2 requests$/,
+    "the capture, still running, gets its own line back");
+  window.__mcp_setIndicator("network", null);
 });

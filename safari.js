@@ -6219,26 +6219,32 @@ export const NETWORK_CAPTURE_JS = `if(!window.__mcp_network){window.__mcp_networ
     var cut=function(s,n){return typeof s==='string'&&s.length>n?s.slice(0,n)+'...['+s.length+' chars]':s;};
     var bodyText=function(b){if(b==null)return null;if(typeof b==='string')return b;if(b instanceof URLSearchParams)return b.toString();
       return '['+Object.prototype.toString.call(b).slice(8,-1)+']';};
-    var headersOf=function(h){try{return Object.fromEntries(new Headers(h||{}).entries());}catch(e){return {};}};
+    var SECRET=/^(authorization|proxy-authorization|cookie|set-cookie|x-amz-security-token)$|token|csrf|xsrf|secret|session|api-?key|password/i;
+    var hideValue=function(k,v){return SECRET.test(k)?'<redacted>':v;};
+    var redactHeaders=function(o){var out={};for(var k in o)out[k]=hideValue(k,o[k]);return out;};
+    var redactUrl=function(u){try{var x=new URL(u,location.href);var hit=false;x.searchParams.forEach(function(v,k){if(SECRET.test(k)||/^(code|sig|signature|id_token|access_token)$/i.test(k))hit=true;});
+      if(!hit)return String(u);var p=new URLSearchParams();x.searchParams.forEach(function(v,k){p.append(k,SECRET.test(k)||/^(code|sig|signature|id_token|access_token)$/i.test(k)?'<redacted>':v);});
+      x.search=p.toString();return x.toString();}catch(e){return String(u);}};
+    var headersOf=function(h){try{return redactHeaders(Object.fromEntries(new Headers(h||{}).entries()));}catch(e){return {};}};
     var origFetch=window.fetch;
     window.fetch=function(input,init){var req=(typeof Request!=='undefined'&&input instanceof Request)?input:null;var opts=init||{};var start=Date.now();
-      var entry=keep({url:req?req.url:String(input),method:(opts.method||(req&&req.method)||'GET').toUpperCase(),type:'fetch',
+      var entry=keep({url:redactUrl(req?req.url:String(input)),method:(opts.method||(req&&req.method)||'GET').toUpperCase(),type:'fetch',
         requestHeaders:headersOf(opts.headers||(req&&req.headers)),requestBody:null,time:new Date().toISOString()});
       if('body' in opts)entry.requestBody=cut(bodyText(opts.body),REQ_MAX);
       else if(req&&entry.method!=='GET'&&entry.method!=='HEAD'){try{req.clone().text().then(function(t){entry.requestBody=cut(t,REQ_MAX);},function(){});}catch(e){}}
       return origFetch.apply(this,arguments).then(function(resp){
         entry.status=resp.status;entry.statusText=resp.statusText;entry.duration=Date.now()-start;
-        entry.headers=Object.fromEntries([...resp.headers.entries()]);
+        entry.headers=redactHeaders(Object.fromEntries([...resp.headers.entries()]));
         try{resp.clone().text().then(function(t){entry.responseBody=cut(t,RESP_MAX);},function(){});}catch(e){}
         return resp;
       }).catch(function(err){entry.error=err.message;entry.duration=Date.now()-start;throw err;});
     };
     var origOpen=XMLHttpRequest.prototype.open,origSend=XMLHttpRequest.prototype.send,origSetHeader=XMLHttpRequest.prototype.setRequestHeader;
     XMLHttpRequest.prototype.open=function(method,url){
-      this.__mcp_entry={url:String(url),method:String(method).toUpperCase(),type:'xhr',requestHeaders:{},requestBody:null};
+      this.__mcp_entry={url:redactUrl(String(url)),method:String(method).toUpperCase(),type:'xhr',requestHeaders:{},requestBody:null};
       return origOpen.apply(this,arguments);
     };
-    XMLHttpRequest.prototype.setRequestHeader=function(name,value){if(this.__mcp_entry)this.__mcp_entry.requestHeaders[name]=value;return origSetHeader.apply(this,arguments);};
+    XMLHttpRequest.prototype.setRequestHeader=function(name,value){if(this.__mcp_entry)this.__mcp_entry.requestHeaders[name]=hideValue(name,value);return origSetHeader.apply(this,arguments);};
     XMLHttpRequest.prototype.send=function(body){var entry=this.__mcp_entry;
       if(entry){var start=Date.now();entry.time=new Date().toISOString();entry.requestBody=cut(bodyText(body),REQ_MAX);keep(entry);
         this.addEventListener('load',function(){entry.status=this.status;entry.statusText=this.statusText;entry.duration=Date.now()-start;
@@ -6249,7 +6255,9 @@ export const NETWORK_CAPTURE_JS = `if(!window.__mcp_network){window.__mcp_networ
 
 // The capture, and its line on the page's indicator badge (page-recorder.js).
 export function networkCaptureScript() {
-  return `${NETWORK_CAPTURE_JS};(${pageIndicator})();window.__mcp_setIndicator("network", "● Capturing network")`;
+  // Its own badge line, counting live, unless a recording that captures the network already counts the requests.
+  return `${NETWORK_CAPTURE_JS};(${pageIndicator})();(function(){var r=window.__mcp_recording;if(r&&r.active&&r.network)return;` +
+    `window.__mcp_setIndicator("network",function(){var n=(window.__mcp_network||[]).length;return "● Capturing network · "+n+" request"+(n===1?"":"s");});})()`;
 }
 
 export async function startNetworkCapture() {
@@ -6279,21 +6287,30 @@ export async function getNetworkDetails(args = {}) {
 // scripts through the extension's evaluate, which runs in the session's tab; the functions below are its AppleScript
 // fallback, which can only reach the window's front tab.
 
-export function recorderScript(command) {
-  // The badge first, so the recorder can show its step count on it; all one expression, since the extension's
-  // evaluate keeps only that value (the recorder's answer).
-  return `(function(){(${pageIndicator})();return (${pageRecorder})(${command ? JSON.stringify(command) : ""});})()`;
+// Starting a recording also captures the page's requests unless `network` is false: the network capture first (it
+// keeps going after the recording stops; it has no stop), then the badge, then the recorder. All one expression,
+// since the extension's evaluate keeps only that value (the recorder's answer).
+export function recorderScript(command, { network = true } = {}) {
+  const capture = !command && network;
+  return `(function(){${capture ? `${NETWORK_CAPTURE_JS};` : ""}(${pageIndicator})();` +
+    `return (${pageRecorder})(${command ? JSON.stringify(command) : "undefined"}, ${JSON.stringify({ network: capture })});})()`;
 }
 
+// The recording and, when it captures the network, the requests made since it started (bodies cut to BODY_MAX, so a
+// long recording still fits in one answer). automation.js's linkRecording ties them to the steps.
+const BODY_MAX = 2000;
 export function recordingReadScript({ limit = 200, clear = false } = {}) {
   const n = Math.max(1, Math.min(2000, Number(limit) || 200));
   return `(function(){var r=window.__mcp_recording;if(!r)return JSON.stringify({recording:false,steps:[]});` +
-    `var out=JSON.stringify({recording:r.active,started:r.started,total:r.steps.length,steps:r.steps.slice(-${n})});` +
+    `var cut=function(s){return typeof s==='string'&&s.length>${BODY_MAX}?s.slice(0,${BODY_MAX})+'...['+s.length+' chars]':s;};` +
+    `var net=r.network?(window.__mcp_network||[]).filter(function(e){return e.time>=r.started;}).map(function(e){` +
+    `var c={};for(var k in e)c[k]=e[k];c.requestBody=cut(e.requestBody);c.responseBody=cut(e.responseBody);return c;}):null;` +
+    `var out=JSON.stringify({recording:r.active,network:!!r.network,started:r.started,total:r.steps.length,steps:r.steps.slice(-${n}),requests:net});` +
     `${clear ? "r.steps.length=0;" : ""}return out;})()`;
 }
 
-export async function startRecording() {
-  return runJS(recorderScript());
+export async function startRecording(options = {}) {
+  return runJS(recorderScript(undefined, options));
 }
 
 export async function stopRecording() {

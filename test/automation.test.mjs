@@ -62,3 +62,32 @@ test("the draft flags what an agent should check before saving it", () => {
   assert.ok(a.review.some((r) => r.includes("P534955152")), "the id in the start URL is pointed out");
   assert.ok(a.review.some((r) => /3 of 5 steps are flagged/.test(r)));
 });
+
+test("requests: each tied to the step that set it off, polling folded apart, and a write pointed out in the review", async () => {
+  const { linkRecording } = await import("../automation.js");
+  const started = "2026-10-13T20:00:00.000Z";
+  const at = (ms) => new Date(Date.parse(started) + ms).toISOString();
+  const gql = (op, kind) => JSON.stringify([{ operationName: op, query: `${kind} ${op} { x }` }]);
+  const recording = {
+    network: true, started,
+    steps: [
+      { type: "start", t: 0, url: "https://t.example.test/P1/communication", tool: null },
+      { type: "click", t: 1000, role: "button", name: "Post", selector: '[data-testid="post"]', tool: { name: "safari_click", args: { selector: '[data-testid="post"]' } } },
+    ],
+    requests: [
+      ...[0, 5000, 10000, 15000].map((ms) => ({ time: at(ms + 1100), method: "GET", url: `https://t.example.test/status?ts=${ms}`, status: 200, responseBody: "ok" })),
+      { time: at(1200), method: "POST", url: "https://gql.example.test/graphql", status: 200, requestBody: gql("createComment", "mutation") },
+      { time: at(1500), method: "POST", url: "https://gql.example.test/graphql", status: 200, requestBody: gql("threadComments", "query") },
+      { time: at(9000), method: "GET", url: "https://t.example.test/lazy", status: 200 },
+    ],
+  };
+  const linked = linkRecording(recording);
+  const post = linked.steps[1];
+  assert.deepEqual(post.requests.map((r) => JSON.parse(r.requestBody)[0].operationName), ["createComment", "threadComments"],
+    "the click's own requests, not the poll that landed just after it");
+  assert.deepEqual(linked.background.polling.map((p) => [p.request, p.count, p.everyMs]), [["GET https://t.example.test/status", 4, 5000]]);
+  assert.deepEqual(linked.background.requests.map((r) => r.url), ["https://t.example.test/lazy"]);
+  const draft = recordingToAutomation(recording);
+  assert.match(draft.steps[0].review.join(" "), /called `createComment` on gql\.example\.test/);
+  assert.ok(!draft.steps[0].review.join(" ").includes("threadComments"), "a read query isn't a write");
+});
