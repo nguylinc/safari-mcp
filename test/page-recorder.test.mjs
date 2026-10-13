@@ -154,3 +154,24 @@ test("starting again after a stop begins an empty recording", () => {
   pageRecorder();
   assert.deepEqual(window.__mcp_recording.steps.map((s) => s.type), ["start"]);
 });
+
+test("a component that re-fires a click on its inner element records one click, the control's", () => {
+  const { document, fire, steps } = page(`<ul role="tablist"><li><a role="tab" href="#c"><span class="label">Communication</span></a></li></ul>`);
+  const tab = document.querySelector("[role=tab]");
+  const span = document.querySelector("span");
+  // The user's click lands on the span; the component then clicks the tab itself.
+  fire(span, "click", { button: 0, detail: 1 });
+  fire(tab, "click", { button: 0, detail: 1 });
+  const clicks = steps().filter((s) => s.type === "click");
+  assert.equal(clicks.length, 1);
+  assert.deepEqual([clicks[0].role, clicks[0].name], ["tab", "Communication"]);
+});
+
+test("two separate clicks on the same element stay two", async () => {
+  const { document, fire, steps } = page(`<button>Next</button>`);
+  const b = document.querySelector("button");
+  fire(b, "click", { button: 0, detail: 1 });
+  await new Promise((r) => setTimeout(r, 120));
+  fire(b, "click", { button: 0, detail: 1 });
+  assert.equal(steps().filter((s) => s.type === "click").length, 2);
+});

@@ -248,6 +248,9 @@ export function pageRecorder(command, options) {
 
   push({ type: "start", tool: null });
 
+  // The last click, to tell one click its component fired twice from two clicks.
+  const DOUBLE_MS = 80;
+  let lastClick = null;
   listen(doc, "click", (event) => {
     if (event.button !== 0) return;
     const el = targetOf(event);
@@ -262,6 +265,19 @@ export function pageRecorder(command, options) {
       return;
     }
     const tool = clickByText(el, d.name) ? { name: "safari_click", args: { text: d.name } } : { name: "safari_click", args: { selector: d.selector } };
+    // One click, two events: a component that clicks its own inner element (or its wrapper) when clicked. Within
+    // DOUBLE_MS of the last click, on an element inside it or around it, it's the same click: keep the control.
+    const now = Date.now();
+    if (last && last.type === "click" && lastClick && now - lastClick.at < DOUBLE_MS &&
+        (lastClick.el.contains(el) || el.contains(lastClick.el))) {
+      const isControl = (r) => ["button", "link", "tab", "menuitem", "option", "checkbox", "radio", "switch", "combobox"].includes(r || "");
+      if (isControl(d.role) && !isControl(last.role)) {
+        Object.assign(last, { ...d, tool });
+        lastClick = { el, at: now };
+      }
+      return;
+    }
+    lastClick = { el, at: now };
     push({ type: "click", ...d, tool });
   });
   listen(doc, "contextmenu", (event) => {
