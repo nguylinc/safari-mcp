@@ -5268,7 +5268,7 @@ const _PAGE_SCRIPTS = {
   // when the hooks never get there.
   const cssPath = (el) => {
     const tag = el.tagName.toLowerCase();
-    const own = hookOf(el) || tag;
+    const own = hookOf(el) || labelOf(el) || tag;
     const parts = [nth(el, own)];
     if (unique(parts[0], el)) return parts[0];
     let top = el;
@@ -5293,10 +5293,21 @@ const _PAGE_SCRIPTS = {
     }
     const strict = [];
     for (let node = el; node && node.nodeType === 1 && node !== doc.documentElement; node = node.parentElement) {
-      strict.unshift(nth(node, node.tagName.toLowerCase()));
+      strict.unshift(node === el ? parts[parts.length - 1] : nth(node, node.tagName.toLowerCase()));
       if (unique(strict.join(" > "), el)) break;
     }
     return strict.join(" > ");
+  };
+
+  // The element's own readable attribute, kept as its part of a CSS path even when another element shares it (a
+  // search box in both the desktop and the mobile header): the path's ancestors or position then tell them apart.
+  const LABEL_ATTRS = ["aria-label", "name", "placeholder", "title"];
+  const labelOf = (el) => {
+    for (const attr of LABEL_ATTRS) {
+      const v = el.getAttribute(attr);
+      if (v) return `${el.tagName.toLowerCase()}[${attr}=${quoted(v)}]`;
+    }
+    return null;
   };
 
   // The best selector for an element (a CSS one, so every safari-mcp tool takes it) and its role and name.
@@ -5310,7 +5321,7 @@ const _PAGE_SCRIPTS = {
     }
     if (!selector && el.id && /^[A-Za-z][\w-]*$/.test(el.id) && !/\d{3,}/.test(el.id) && unique(`#${css(el.id)}`, el)) selector = `#${css(el.id)}`;
     const tag = el.tagName.toLowerCase();
-    for (const attr of ["aria-label", "name", "placeholder", "title"]) {
+    for (const attr of LABEL_ATTRS) {
       if (selector) break;
       const v = el.getAttribute(attr);
       if (v && unique(`${tag}[${attr}=${quoted(v)}]`, el)) selector = `${tag}[${attr}=${quoted(v)}]`;

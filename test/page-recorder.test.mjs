@@ -176,3 +176,13 @@ test("two separate clicks on the same element stay two", async () => {
   fire(b, "click", { button: 0, detail: 1 });
   assert.equal(steps().filter((s) => s.type === "click").length, 2);
 });
+
+test("a field whose label another field shares keeps the label in its selector, told apart by its place", () => {
+  const { document, fire, steps } = page(`<header class="desktop-header"><input aria-label="Search CMs"></header>
+    <div class="mobile-header"><input aria-label="Search CMs"></div>`);
+  const field = document.querySelector("header input");
+  field.value = "MCM-1"; fire(field, "input");
+  const [fill] = steps();
+  assert.match(fill.selector, /input\[aria-label="Search CMs"\]/);
+  assert.equal(document.querySelector(fill.selector), field);
+});
