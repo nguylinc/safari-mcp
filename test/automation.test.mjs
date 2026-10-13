@@ -39,3 +39,26 @@ test("a password becomes a param with no default, and nothing typed into it is k
   assert.equal(a.steps[2].args.value, `{{${pw[0]}}}`);
   assert.ok(!JSON.stringify(a).includes("<password>"));
 });
+
+test("the draft flags what an agent should check before saving it", () => {
+  const steps = [
+    { type: "start", t: 0, url: "https://t.example.test/P534955152/communication", tool: null },
+    { type: "scroll", t: 50, url: "https://t.example.test/P534955152/communication", tool: { name: "safari_scroll_to", args: { x: 0, y: 200 } } },
+    { type: "click", t: 100, role: "tab", name: "Overview", tool: { name: "safari_click", args: { text: "Overview" } } },
+    { type: "navigate", t: 200, url: "https://t.example.test/P534955152/overview", tool: { name: "safari_navigate", args: {} } },
+    { type: "click", t: 3000, role: "tab", name: "Communication", tool: { name: "safari_click", args: { text: "Communication" } } },
+    { type: "navigate", t: 3100, url: "https://t.example.test/P534955152/communication", tool: { name: "safari_navigate", args: {} } },
+    { type: "click", t: 4000, role: null, name: "nguylinc 12:23", tool: { name: "safari_click", args: { selector: "ul > li:nth-of-type(2) > div" } } },
+    { type: "click", t: 5000, role: "button", name: "Post", tool: { name: "safari_click", args: { selector: '[data-testid="post"]' } } },
+  ];
+  const a = recordingToAutomation({ steps });
+  const [scroll, overview, back, header, post] = a.steps;
+  assert.match(scroll.review.join(" "), /a scroll/);
+  assert.equal(overview.review, undefined);
+  assert.match(back.review.join(" "), /returns to a page visited earlier/);
+  assert.match(header.review.join(" "), /position-based selector/);
+  assert.match(header.review.join(" "), /isn't a control/);
+  assert.equal(post.review, undefined);
+  assert.ok(a.review.some((r) => r.includes("P534955152")), "the id in the start URL is pointed out");
+  assert.ok(a.review.some((r) => /3 of 5 steps are flagged/.test(r)));
+});

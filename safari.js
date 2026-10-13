@@ -6280,8 +6280,9 @@ export async function getNetworkDetails(args = {}) {
 // fallback, which can only reach the window's front tab.
 
 export function recorderScript(command) {
-  // The badge first, so the recorder can show its step count on it.
-  return `(${pageIndicator})();(${pageRecorder})(${command ? JSON.stringify(command) : ""})`;
+  // The badge first, so the recorder can show its step count on it; all one expression, since the extension's
+  // evaluate keeps only that value (the recorder's answer).
+  return `(function(){(${pageIndicator})();return (${pageRecorder})(${command ? JSON.stringify(command) : ""});})()`;
 }
 
 export function recordingReadScript({ limit = 200, clear = false } = {}) {
