@@ -4410,7 +4410,7 @@ server.tool(
 
 server.tool(
   "safari_start_network_capture",
-  "Start capturing detailed network requests (fetch + XHR) with headers, status, timing. Call once per page. Intercepts fetch/XHR — captures requests AFTER this call only. For quick overview of already-loaded resources, use safari_network instead.",
+  "Start capturing detailed network requests (fetch + XHR): method, URL, request headers and body, response status, headers and body (bodies truncated), timing. Call once per page. Intercepts fetch/XHR — captures requests AFTER this call only. For quick overview of already-loaded resources, use safari_network instead.",
   {},
   async () => {
     const result = await safari.startNetworkCapture();
@@ -4420,7 +4420,7 @@ server.tool(
 
 server.tool(
   "safari_network_details",
-  "Get captured network requests with full details (must call safari_start_network_capture first)",
+  "Get captured network requests with full details, request and response bodies included (must call safari_start_network_capture first). They can hold auth headers or tokens: don't echo them.",
   {
     receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)"),
     limit: z.coerce.number().optional().describe("Max requests (default: 50)"),

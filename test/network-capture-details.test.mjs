@@ -1,0 +1,79 @@
+#!/usr/bin/env node
+/**
+ * safari_start_network_capture records what's needed to replay a request: the method of a
+ * fetch(new Request(...)) (it used to read only the init, so every such POST showed as GET), the
+ * request's headers and body, and the response's status, headers and body, for fetch and XHR alike.
+ *
+ * Run:  node --test test/network-capture-details.test.mjs
+ */
+import assert from "node:assert";
+import { test } from "node:test";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+
+const safari = readFileSync(new URL("../safari.js", import.meta.url), "utf8");
+const script = safari.match(/export const NETWORK_CAPTURE_JS = `([\s\S]*?)`;/)[1];
+
+// A page with a fetch that answers every request, and a minimal XMLHttpRequest.
+function page() {
+  class FakeXHR {
+    constructor() { this.listeners = {}; }
+    addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
+    open() {}
+    setRequestHeader() {}
+    send() {
+      this.status = 201; this.statusText = "Created"; this.responseText = '{"ok":true}';
+      for (const fn of this.listeners.load || []) fn.call(this);
+    }
+  }
+  const window = {
+    fetch: async (input) => new Response(`echo ${input instanceof Request ? input.url : input}`, { status: 200, headers: { "x-test": "1" } }),
+  };
+  const context = vm.createContext({ window, XMLHttpRequest: FakeXHR, Request, Response, Headers, URLSearchParams, Date, Object, String });
+  vm.runInContext(script, context);
+  return { window, context };
+}
+
+const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+test("fetch(Request): the Request's method, headers and body, and the response's body", async () => {
+  const { window } = page();
+  const body = JSON.stringify([{ operationName: "createComment", variables: { message: "hi" } }]);
+  await window.fetch(new Request("https://example.test/graphql", { method: "POST", headers: { "content-type": "application/json" }, body }));
+  await settle();
+  const [entry] = window.__mcp_network;
+  assert.equal(entry.method, "POST");
+  assert.equal(entry.url, "https://example.test/graphql");
+  assert.equal(entry.requestHeaders["content-type"], "application/json");
+  assert.equal(entry.requestBody, body);
+  assert.equal(entry.status, 200);
+  assert.equal(entry.headers["x-test"], "1");
+  assert.equal(entry.responseBody, "echo https://example.test/graphql");
+});
+
+test("fetch(url, init): the init's method and body; a body that isn't text is named, not read", async () => {
+  const { window } = page();
+  await window.fetch("https://example.test/a", { method: "put", body: new URLSearchParams({ q: "1" }) });
+  await window.fetch("https://example.test/b", { method: "POST", body: new Blob(["x"]) });
+  await settle();
+  assert.equal(window.__mcp_network[0].method, "PUT");
+  assert.equal(window.__mcp_network[0].requestBody, "q=1");
+  assert.equal(window.__mcp_network[1].requestBody, "[Blob]");
+});
+
+test("XHR: method, set headers, body and response", () => {
+  const { window, context } = page();
+  const xhr = new context.XMLHttpRequest();
+  xhr.open("post", "https://example.test/x");
+  xhr.setRequestHeader("X-Csrf", "t");
+  xhr.send("a=1");
+  const [entry] = window.__mcp_network;
+  assert.deepEqual([entry.method, entry.requestHeaders["X-Csrf"], entry.requestBody, entry.status, entry.responseBody], ["POST", "t", "a=1", 201, '{"ok":true}']);
+});
+
+test("starting twice wraps fetch once", async () => {
+  const { window, context } = page();
+  vm.runInContext(script, context);
+  await window.fetch("https://example.test/once");
+  assert.equal(window.__mcp_network.length, 1);
+});

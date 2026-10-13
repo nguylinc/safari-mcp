@@ -8,12 +8,17 @@ signing, installing and running it lives in the rinkagu repo, not here: `dotfile
 
 ## What differs from upstream
 
-One change: with `SAFARI_MCP_ALLOW_USER_TABS=1`, `safari_switch_tab` by index adopts a tab the user already had open
+One change to tabs: with `SAFARI_MCP_ALLOW_USER_TABS=1`, `safari_switch_tab` by index adopts a tab the user already had open
 even when the extension is connected. Upstream only honored the flag in the AppleScript fallback; its extension refused
 any tab the session didn't open. The daemon (`index.js`) sends `adoptUserTab` with an explicit-index switch when the
 flag is on; the extension (`extension/background.js`, block at the end of the file) adopts the tab, records it in
 `storage.local` (`safariMcpAdoptedTabs`, so a restarted worker still knows), and `close_tab` refuses it. Tests:
 `test/adopt-user-tabs-extension.test.mjs`.
+
+And `safari_start_network_capture` records enough to replay a request: the method of a `fetch(new Request(...))`
+(upstream read only the init, so those POSTs showed as GET), the request's headers and body, and the response's body
+(`NETWORK_CAPTURE_JS` in `safari.js`, daemon-side, so no extension rebuild). Tests:
+`test/network-capture-details.test.mjs`.
 
 Keep the diff this small. Many tests cut functions out of `background.js` by marker (`between(background, "...",
 "...")`) and run them with injected helpers: new helpers or top-level statements placed inside such a range, or a new

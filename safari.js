@@ -6207,33 +6207,47 @@ export async function waitForTime({ ms }) {
 
 // ========== NETWORK CAPTURE (Detailed) ==========
 
-export async function startNetworkCapture() {
-  await runJS(
-    `if(!window.__mcp_network){window.__mcp_network=[];
+// The page-side capture. Each entry is recorded when the request starts and filled in as it completes:
+// the method (from the init or, for fetch(new Request(...)), the Request itself, which the
+// arguments-only version reported as GET), the request's headers and body, and the response's status,
+// headers and body (bodies cut at REQ_MAX / RESP_MAX). Entries keep the old fields (`headers` is the
+// response's), so earlier readers still work. A body that isn't text (FormData, a Blob) is named, not read.
+export const NETWORK_CAPTURE_JS = `if(!window.__mcp_network){window.__mcp_network=[];
+    var MAX=1000,REQ_MAX=20000,RESP_MAX=8000;
+    var keep=function(e){window.__mcp_network.push(e);if(window.__mcp_network.length>MAX)window.__mcp_network.shift();return e;};
+    var cut=function(s,n){return typeof s==='string'&&s.length>n?s.slice(0,n)+'...['+s.length+' chars]':s;};
+    var bodyText=function(b){if(b==null)return null;if(typeof b==='string')return b;if(b instanceof URLSearchParams)return b.toString();
+      return '['+Object.prototype.toString.call(b).slice(8,-1)+']';};
+    var headersOf=function(h){try{return Object.fromEntries(new Headers(h||{}).entries());}catch(e){return {};}};
     var origFetch=window.fetch;
-    window.fetch=function(){var url=arguments[0];var opts=arguments[1]||{};var start=Date.now();
+    window.fetch=function(input,init){var req=(typeof Request!=='undefined'&&input instanceof Request)?input:null;var opts=init||{};var start=Date.now();
+      var entry=keep({url:req?req.url:String(input),method:(opts.method||(req&&req.method)||'GET').toUpperCase(),type:'fetch',
+        requestHeaders:headersOf(opts.headers||(req&&req.headers)),requestBody:null,time:new Date().toISOString()});
+      if('body' in opts)entry.requestBody=cut(bodyText(opts.body),REQ_MAX);
+      else if(req&&entry.method!=='GET'&&entry.method!=='HEAD'){try{req.clone().text().then(function(t){entry.requestBody=cut(t,REQ_MAX);},function(){});}catch(e){}}
       return origFetch.apply(this,arguments).then(function(resp){
-        var entry={url:typeof url==='string'?url:url.url,method:opts.method||'GET',status:resp.status,statusText:resp.statusText,
-          type:'fetch',duration:Date.now()-start,headers:Object.fromEntries([...resp.headers.entries()].slice(0,20)),time:new Date().toISOString()};
-        window.__mcp_network.push(entry);if(window.__mcp_network.length>5000)window.__mcp_network.shift();return resp;
-      }).catch(function(err){
-        window.__mcp_network.push({url:typeof url==='string'?url:url.url,method:opts.method||'GET',error:err.message,type:'fetch',time:new Date().toISOString()});if(window.__mcp_network.length>5000)window.__mcp_network.shift();
-        throw err;
-      });
+        entry.status=resp.status;entry.statusText=resp.statusText;entry.duration=Date.now()-start;
+        entry.headers=Object.fromEntries([...resp.headers.entries()]);
+        try{resp.clone().text().then(function(t){entry.responseBody=cut(t,RESP_MAX);},function(){});}catch(e){}
+        return resp;
+      }).catch(function(err){entry.error=err.message;entry.duration=Date.now()-start;throw err;});
     };
-    var origXHR=XMLHttpRequest.prototype.open;
+    var origOpen=XMLHttpRequest.prototype.open,origSend=XMLHttpRequest.prototype.send,origSetHeader=XMLHttpRequest.prototype.setRequestHeader;
     XMLHttpRequest.prototype.open=function(method,url){
-      this.__mcp_method=method;this.__mcp_url=url;this.__mcp_start=Date.now();
-      this.addEventListener('load',function(){
-        window.__mcp_network.push({url:this.__mcp_url,method:this.__mcp_method,status:this.status,statusText:this.statusText,
-          type:'xhr',duration:Date.now()-this.__mcp_start,responseSize:this.responseText.length,time:new Date().toISOString()});if(window.__mcp_network.length>5000)window.__mcp_network.shift();
-      });
-      this.addEventListener('error',function(){
-        window.__mcp_network.push({url:this.__mcp_url,method:this.__mcp_method,error:'Network error',type:'xhr',time:new Date().toISOString()});if(window.__mcp_network.length>5000)window.__mcp_network.shift();
-      });
-      return origXHR.apply(this,arguments);
-    };}`
-  );
+      this.__mcp_entry={url:String(url),method:String(method).toUpperCase(),type:'xhr',requestHeaders:{},requestBody:null};
+      return origOpen.apply(this,arguments);
+    };
+    XMLHttpRequest.prototype.setRequestHeader=function(name,value){if(this.__mcp_entry)this.__mcp_entry.requestHeaders[name]=value;return origSetHeader.apply(this,arguments);};
+    XMLHttpRequest.prototype.send=function(body){var entry=this.__mcp_entry;
+      if(entry){var start=Date.now();entry.time=new Date().toISOString();entry.requestBody=cut(bodyText(body),REQ_MAX);keep(entry);
+        this.addEventListener('load',function(){entry.status=this.status;entry.statusText=this.statusText;entry.duration=Date.now()-start;
+          try{entry.responseBody=cut(this.responseText,RESP_MAX);entry.responseSize=this.responseText.length;}catch(e){}});
+        this.addEventListener('error',function(){entry.error='Network error';entry.duration=Date.now()-start;});}
+      return origSend.apply(this,arguments);
+    };}`;
+
+export async function startNetworkCapture() {
+  await runJS(NETWORK_CAPTURE_JS);
   return "Network capture started (fetch + XHR interception)";
 }
 
