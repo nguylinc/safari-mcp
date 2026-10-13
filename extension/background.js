@@ -411,6 +411,10 @@ async function _switchTabForSession(sessionId, targetTab, payload) {
   if (!_isTabOwnedBySession(sessionId, target.id)) {
     if (suppliedReceipt && targetTab && target.id === targetTab.id) {
       await _addOwnedTab(sessionId, target.id);
+    } else if (payload.adoptUserTab === true && !suppliedReceipt) {
+      // The daemon sends this only for an explicit index with SAFARI_MCP_ALLOW_USER_TABS set.
+      await _markTabAdopted(target.id);
+      await _addOwnedTab(sessionId, target.id);
     } else {
       throw new Error(`\u26a0\ufe0f Tab safety: refusing "switch_tab" to tab ${target.id} (${_safeTabUrl(target.url)}) \u2014 not opened by this MCP session. Use safari_new_tab first.`);
     }
@@ -1990,6 +1994,7 @@ async function handleCommand(type, payload) {
       // window vanish). Per-window, not global, so other-profile windows don't
       // mask it. If the target window is down to one tab, blank it instead.
       // Mirrors safari.js closeTab().
+      await _refuseClosingAdoptedTab(sessionId, targetTab, payload);
       return await _closeTabForSession(sessionId, targetTab, payload);
     }
 
@@ -4907,3 +4912,45 @@ _startupReady.then(() => {
   if (_enabled) connect();
   else updateBadge("OFF");
 }).catch(() => connect());
+
+// Tabs a session adopted from the user (SAFARI_MCP_ALLOW_USER_TABS, an explicit switch_tab by index): writable, never
+// closable. Kept in its own storage key, apart from the owned-tabs machinery, so a restarted worker still refuses to
+// close them.
+const _ADOPTED_TABS_KEY = "safariMcpAdoptedTabs";
+let _adoptedTabIds = null;
+async function _adoptedTabs() {
+  if (_adoptedTabIds) return _adoptedTabIds;
+  try {
+    const stored = await browser.storage.local.get(_ADOPTED_TABS_KEY);
+    _adoptedTabIds = new Set(stored[_ADOPTED_TABS_KEY] || []);
+  } catch {
+    _adoptedTabIds = new Set();
+  }
+  return _adoptedTabIds;
+}
+async function _saveAdoptedTabs() {
+  try { await browser.storage.local.set({ [_ADOPTED_TABS_KEY]: [...(await _adoptedTabs())] }); } catch {}
+}
+async function _markTabAdopted(tabId) {
+  (await _adoptedTabs()).add(tabId);
+  await _saveAdoptedTabs();
+}
+async function _isTabAdopted(tabId) {
+  return (await _adoptedTabs()).has(tabId);
+}
+// Run before _closeTabForSession, resolving the tab the same way it does (an explicit index is local to the session's window).
+async function _refuseClosingAdoptedTab(sessionId, targetTab, payload) {
+  if (!(await _adoptedTabs()).size) return;
+  let tab = targetTab;
+  const index = Number(payload.index);
+  if (Number.isInteger(index) && index > 0) {
+    const windowTabs = await browser.tabs.query(_windowQuery(_windowForSession(sessionId) || targetTab?.windowId));
+    tab = windowTabs.find((candidate) => candidate.index + 1 === index) || windowTabs[index - 1] || tab;
+  }
+  if (tab && await _isTabAdopted(tab.id)) {
+    throw new Error(`\u26a0\ufe0f Tab safety: refusing to close tab ${tab.id} (${_safeTabUrl(tab.url)}) \u2014 it was adopted from you via SAFARI_MCP_ALLOW_USER_TABS, not opened by this MCP session. Close it yourself.`);
+  }
+}
+browser.tabs.onRemoved.addListener(async (tabId) => {
+  if ((await _adoptedTabs()).delete(tabId)) await _saveAdoptedTabs();
+});

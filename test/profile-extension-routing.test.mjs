@@ -1335,7 +1335,7 @@ test("public switch_tab forwards an opaque receipt and sanitizes extension outpu
   assert.match(switchTabTool, /receipt:\s*z\.string\(\)\.optional\(\)/);
   assert.match(switchTabTool, /async \(\{ index, receipt, url \}\) =>/);
   assert.match(switchTabTool, /const token = _receiptToken\(supplied\)/);
-  assert.match(switchTabTool, /"switch_tab", token \? \{ \.\.\.\(index \? \{ index \} : \{\}\), receipt: token \} : \{ index \}/);
+  assert.match(switchTabTool, /"switch_tab", token \? \{ \.\.\.\(index \? \{ index \} : \{\}\), receipt: token \} : \{ index, \.\.\.\(allowUserTabs\(\) \? \{ adoptUserTab: true \} : \{\}\) \}/);
   assert.match(switchTabTool, /const safeResult = _sanitizeTabResult\(result\)/);
   assert.match(switchTabTool, /safeResult\?\.tabIndex \|\| index/);
   assert.doesNotMatch(switchTabTool, /tabUrl:/);

@@ -125,7 +125,7 @@ function makeExtension() {
     "_withReceiptMutationLock", "_ensureBrowserSessionEpoch", "_isTabOwnedByAnySession",
     "_isTabOwnedBySession", "_addOwnedTab", "_removeOwnedTab", "_hydrateOwnedTabs",
     "_adoptWindowForSession", "_windowForSession", "_windowQuery", "getTargetTab",
-    "_getReceiptTargetTab", "_DEFAULT_SESSION",
+    "_getReceiptTargetTab", "_DEFAULT_SESSION", "_refuseClosingAdoptedTab",
     `${extensionParts}
     return {
       _issueTabReceipt,
@@ -151,7 +151,8 @@ function makeExtension() {
     async (_receipt, session) => live(cached.get(session))
       || [...(owned.get(session) || [])].reverse().map(live).find(Boolean)
       || tabs.find((tab) => tab.active),
-    async () => assert.fail("no get_tab_receipt in this test"), "_default"
+    async () => assert.fail("no get_tab_receipt in this test"), "_default",
+    async () => {} // _refuseClosingAdoptedTab: nothing is adopted here
   );
 
   // new_tab, as _newTabForSession does it: a background tab the session owns, then its receipt.

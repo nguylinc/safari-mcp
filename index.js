@@ -3526,7 +3526,7 @@ server.tool(
     }
     let viaAppleScript = false;
     const result = await extensionOrFallback(
-      "switch_tab", token ? { ...(index ? { index } : {}), receipt: token } : { index },
+      "switch_tab", token ? { ...(index ? { index } : {}), receipt: token } : { index, ...(allowUserTabs() ? { adoptUserTab: true } : {}) },
       async () => {
         if (token) throw _receiptNeedsExtension("switch_tab");
         viaAppleScript = true;
