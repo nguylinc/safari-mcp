@@ -15,7 +15,7 @@ import { VIEWPORT_SCRIPT, SAFE_AREA_SCRIPT, PWA_SCRIPT, WEBKIT_COMPAT_SCRIPT, AL
 import { escJsSingleQuote, escAppleScriptString } from "./injected-escape.js";
 import { currentSessionId } from "./session-context.js";
 import { allowUserTabs } from "./ownership-state.js";
-import { pageRecorder } from "./page-recorder.js";
+import { pageIndicator, pageRecorder } from "./page-recorder.js";
 // Extension bridge is handled by index.js (WebSocket server on port 9223)
 
 const execFileAsync = promisify(execFile);
@@ -6247,8 +6247,13 @@ export const NETWORK_CAPTURE_JS = `if(!window.__mcp_network){window.__mcp_networ
       return origSend.apply(this,arguments);
     };}`;
 
+// The capture, and its line on the page's indicator badge (page-recorder.js).
+export function networkCaptureScript() {
+  return `${NETWORK_CAPTURE_JS};(${pageIndicator})();window.__mcp_setIndicator("network", "● Capturing network")`;
+}
+
 export async function startNetworkCapture() {
-  await runJS(NETWORK_CAPTURE_JS);
+  await runJS(networkCaptureScript());
   return "Network capture started (fetch + XHR interception)";
 }
 
@@ -6275,7 +6280,8 @@ export async function getNetworkDetails(args = {}) {
 // fallback, which can only reach the window's front tab.
 
 export function recorderScript(command) {
-  return command ? `(${pageRecorder})(${JSON.stringify(command)})` : `(${pageRecorder})()`;
+  // The badge first, so the recorder can show its step count on it.
+  return `(${pageIndicator})();(${pageRecorder})(${command ? JSON.stringify(command) : ""})`;
 }
 
 export function recordingReadScript({ limit = 200, clear = false } = {}) {

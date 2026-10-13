@@ -26,7 +26,10 @@ install `page-recorder.js` in the page through `safari.js`'s `startRecording` an
 (one fill per field), special keys and shortcuts, selects, checkboxes, submits, scrolls and in-app navigation, each with
 a selector ranked like Playwright's recorder (`packages/injected/src/recorder/recorder.ts` and `selectorGenerator.ts`
 in microsoft/playwright, read for this) and the safari-mcp call that replays it; never a password's value. Daemon-side
-too, so it ends on a full page load. Tests: `test/page-recorder.test.mjs`.
+too, so it ends on a full page load. Tests: `test/page-recorder.test.mjs`. `safari_get_recording` with
+`format: "automation"` turns it into a saved-automation JSON (`automation.js`, which documents the format; tests:
+`test/automation.test.mjs`) that rinkagu's `bin/safari-auto` replays. While recording or capturing network, the page
+shows a small badge saying so (`pageIndicator` in `page-recorder.js`).
 
 The recording and network tools send their scripts through the extension's `evaluate` (like `safari_evaluate`), so
 they act on the session's tab, an adopted one included. Upstream's network tools used `runJS`, AppleScript's

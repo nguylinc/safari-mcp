@@ -11,6 +11,7 @@ import { startTransport } from "./transport.js";
 import { currentSessionId } from "./session-context.js";
 import { z } from "zod";
 import * as safari from "./safari.js";
+import { recordingToAutomation } from "./automation.js";
 import { textResult, jsonResult, imageResult, errorResult, evalResult } from "./response.js";
 import {
   OWNERSHIP_DIR, BLANK_TAB_SENTINEL,
@@ -4415,7 +4416,7 @@ server.tool(
   // The network tools run through the extension's evaluate, so they act on the session's tab (an adopted one
   // included); runJS, their fallback, reaches only the window's front tab.
   async (args) => {
-    await extensionOrFallback("evaluate", { script: safari.NETWORK_CAPTURE_JS, ..._explicitReceipt(args) },
+    await extensionOrFallback("evaluate", { script: safari.networkCaptureScript(), ..._explicitReceipt(args) },
       () => safari.startNetworkCapture());
     return textResult("Network capture started (fetch + XHR interception)");
   }
@@ -4458,9 +4459,18 @@ server.tool(
     receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)"),
     limit: z.coerce.number().optional().describe("Max steps, the latest (default: 200)"),
     clear: z.boolean().optional().describe("Empty the recording after reading it (it keeps recording)"),
+    format: z.enum(["steps", "automation"]).optional().describe("steps (default), or automation: a saved-automation JSON (automation.js) a runner replays, typed values as {{params}}"),
+    name: z.string().optional().describe("With format automation: its name"),
+    server: z.string().optional().describe("With format automation: the MCP server to replay it through (e.g. safari-amazon)"),
   },
-  async (args) => evalResult(await extensionOrFallback(
-    "evaluate", { script: safari.recordingReadScript(args), ..._explicitReceipt(args) }, () => safari.getRecording(args)))
+  async (args) => {
+    const raw = await extensionOrFallback(
+      "evaluate", { script: safari.recordingReadScript({ ...args, limit: args.format === "automation" ? 2000 : args.limit }),
+        ..._explicitReceipt(args) }, () => safari.getRecording(args));
+    if (args.format !== "automation") return evalResult(raw);
+    const recording = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return textResult(JSON.stringify(recordingToAutomation(recording, { name: args.name, server: args.server }), null, 2));
+  }
 );
 
 server.tool(

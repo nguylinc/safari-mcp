@@ -94,3 +94,36 @@ test("in-app navigation is a step; stopping keeps the steps and records nothing 
   window.history.pushState({}, "", "/page/3");
   assert.equal(steps().length, 1);
 });
+
+test("an icon-only button is named by its icon and found through stable hooks, not page positions", () => {
+  const card = (id) => `<div id="${id}" data-testid="comment-card" class="sim-commentCardPrimary awsui_root_xjuzf_495">
+      <div class="sim-commentCardPrimary--author"><span class="awsui_root_xjuzf_sck6h_495 sim-copyToClipboard">
+        <button class="awsui_button_vjswe_5stl2_70"><span class="awsui_icon_h11ix_13 awsui_name-copy_h11ix_593"><svg aria-hidden="true"></svg></span></button>
+      </span></div></div>`;
+  const { document, fire, steps } = page(`<ul><li>${card("eeea8b85-4b90-456f-8f6b-5ae40731626f")}</li><li>${card("1b2c3d4e-0000-1111-2222-333344445555")}</li></ul>`);
+  const second = document.querySelectorAll("button")[1];
+  fire(second, "click", { button: 0, detail: 1 });
+  const [step] = steps();
+  assert.equal(step.name, "copy");
+  assert.ok(!/awsui_|eeea8b85|1b2c3d4e/.test(step.selector), `selector leans on generated classes or ids: ${step.selector}`);
+  assert.match(step.selector, /\[data-testid="comment-card"\]|span\.sim-copyToClipboard/);
+  assert.equal(document.querySelector(step.selector), second);
+});
+
+test("the badge shows the step count, isn't recorded itself, and goes when recording stops", async () => {
+  const dom = new JSDOM(`<!doctype html><body><button>Go</button></body>`, { url: "https://example.test/", pretendToBeVisual: true });
+  globalThis.window = dom.window;
+  globalThis.document = dom.window.document;
+  const { pageIndicator } = await import("../page-recorder.js");
+  pageIndicator();
+  pageRecorder();
+  const click = (el) => el.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, composed: true, button: 0, detail: 1 }));
+  click(document.querySelector("button"));
+  const host = document.getElementById("__mcp_indicator");
+  assert.ok(host, "the badge is on the page");
+  assert.match(host.shadowRoot.textContent, /Recording · 1 steps/);
+  click(host);
+  assert.equal(window.__mcp_recording.steps.filter((s) => s.type === "click").length, 1);
+  pageRecorder("stop");
+  assert.equal(document.getElementById("__mcp_indicator"), null);
+});

@@ -22,9 +22,11 @@ export function pageRecorder(command) {
   const started = Date.now();
   const steps = w.__mcp_recording && w.__mcp_recording.steps ? w.__mcp_recording.steps : [];
   const cleanups = [];
+  const badge = (text) => { if (w.__mcp_setIndicator) w.__mcp_setIndicator("recording", text); };
   const rec = { active: true, steps, started: new Date(started).toISOString(), stop() {
     rec.active = false;
     for (const undo of cleanups.splice(0)) undo();
+    badge(null);
   } };
   w.__mcp_recording = rec;
 
@@ -91,28 +93,90 @@ export function pageRecorder(command) {
     // An input's value is its name only for a button (`<input type=submit value="Save">`): never for a field, so
     // what was typed (a password above all) can't leak into the step's name.
     const buttonValue = tag === "input" && ["button", "submit", "reset"].includes((el.getAttribute("type") || "").toLowerCase()) ? el.value : "";
-    return norm(el.getAttribute("placeholder") || el.getAttribute("title") || el.getAttribute("alt") || buttonValue || "");
+    return norm(el.getAttribute("placeholder") || el.getAttribute("title") || el.getAttribute("alt") || buttonValue || "") ||
+      iconName(el);
   };
 
-  const cssPath = (el) => {
-    const parts = [];
-    let node = el;
-    while (node && node.nodeType === 1 && node !== doc.documentElement) {
-      let part = node.tagName.toLowerCase();
-      if (node.id && /^[A-Za-z][\w-]*$/.test(node.id) && !/\d{3,}/.test(node.id)) {
-        parts.unshift(`#${css(node.id)}`);
-        break;
+  // A class a person wrote (`sim-copyToClipboard`, `save-button`), not one a build generated (`awsui_button_vjswe_5stl2_70`,
+  // `css-1x2y3z`): letters, digits and dashes, no underscore, no long digit run, no short hash segment.
+  const stableClass = (node) => [...(node.classList || [])].find((c) =>
+    /^[A-Za-z][A-Za-z0-9-]{2,39}$/.test(c) && !/\d{3,}/.test(c) && !/^(css|sc|jsx|emotion|svelte)-/.test(c) && !/-[a-z0-9]{5,}$/.test(c));
+  const words = (s) => s.replace(/^[a-z]{1,4}-(?=[a-z])/, "").replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[-_]+/g, " ").toLowerCase().trim();
+
+  // An icon-only control's name: its icon's (a design system's `name-copy` / `icon-close` class, an svg <title>, an
+  // image's alt, a labelled child), else a readable class on it or a close ancestor (`sim-copyToClipboard`).
+  const iconName = (el) => {
+    for (const node of [el, ...el.querySelectorAll("*")].slice(0, 30)) {
+      const cls = typeof node.className === "string" ? node.className : (node.getAttribute && node.getAttribute("class")) || "";
+      const m = cls.match(/(?:^|[\s_-])name-([a-z][a-z0-9-]*?)(?:_|\s|$)/) || cls.match(/(?:^|\s)icon-([a-z][a-z0-9-]+)(?:\s|$)/);
+      if (m) return words(m[1]);
+      if (node !== el) {
+        const label = node.tagName === "title" || node.tagName === "TITLE" ? node.textContent : node.getAttribute("aria-label") || node.getAttribute("alt") || node.getAttribute("title");
+        if (norm(label)) return norm(label);
       }
-      const parent = node.parentElement;
-      if (parent) {
-        const same = [...parent.children].filter((c) => c.tagName === node.tagName);
-        if (same.length > 1) part += `:nth-of-type(${same.indexOf(node) + 1})`;
-      }
-      parts.unshift(part);
-      if (unique(parts.join(" > "), el)) break;
-      node = parent;
     }
-    return parts.join(" > ");
+    for (let node = el, i = 0; node && i < 4; node = node.parentElement, i++) {
+      const c = stableClass(node);
+      if (c) return words(c);
+    }
+    return "";
+  };
+
+  // A selector for one step of the path: a test id, a stable id, a readable class, else just the tag.
+  const TEST_IDS = ["data-testid", "data-test-id", "data-test", "data-qa", "data-cy"];
+  const hookOf = (node) => {
+    for (const attr of TEST_IDS) {
+      const v = node.getAttribute(attr);
+      if (v) return `[${attr}=${quoted(v)}]`;
+    }
+    if (node.id && /^[A-Za-z][\w-]*$/.test(node.id) && !/\d{3,}/.test(node.id)) return `#${css(node.id)}`;
+    const c = stableClass(node);
+    return c ? `${node.tagName.toLowerCase()}.${css(c)}` : null;
+  };
+  // Which of its same-tag siblings a node is, when its hook alone doesn't tell them apart.
+  const nth = (node, hook) => {
+    const parent = node.parentElement;
+    if (!parent) return hook;
+    const matching = [...parent.children].filter((c) => { try { return c.matches(hook); } catch { return false; } });
+    if (matching.length < 2) return hook;
+    const sameTag = [...parent.children].filter((c) => c.tagName === node.tagName);
+    return `${hook}:nth-of-type(${sameTag.indexOf(node) + 1})`;
+  };
+
+  // A CSS path built from the stable hooks above the element (descendant steps, skipping the levels that have none),
+  // short as it can be while still matching only the element; the strict child path of tags and positions only
+  // when the hooks never get there.
+  const cssPath = (el) => {
+    const tag = el.tagName.toLowerCase();
+    const own = hookOf(el) || tag;
+    const parts = [nth(el, own)];
+    if (unique(parts[0], el)) return parts[0];
+    let top = el;
+    for (let node = el.parentElement; node && node !== doc.documentElement; node = node.parentElement) {
+      const hook = hookOf(node);
+      if (!hook) continue;
+      parts.unshift(nth(node, hook));
+      top = node;
+      const candidate = parts.join(" ");
+      if (unique(candidate, el)) return candidate;
+    }
+    // Still several (the same hooks in each item of a list): say which item, by the position of the nearest
+    // repeated ancestor above the hooks (`li:nth-of-type(2) [data-testid="comment-card"] … button`).
+    if (top !== el) {
+      for (let node = top.parentElement; node && node !== doc.documentElement; node = node.parentElement) {
+        const positioned = nth(node, node.tagName.toLowerCase());
+        if (positioned === node.tagName.toLowerCase()) continue;
+        const candidate = `${positioned} ${parts.join(" ")}`;
+        if (unique(candidate, el)) return candidate;
+        parts.unshift(positioned);
+      }
+    }
+    const strict = [];
+    for (let node = el; node && node.nodeType === 1 && node !== doc.documentElement; node = node.parentElement) {
+      strict.unshift(nth(node, node.tagName.toLowerCase()));
+      if (unique(strict.join(" > "), el)) break;
+    }
+    return strict.join(" > ");
   };
 
   // The best selector for an element (a CSS one, so every safari-mcp tool takes it) and its role and name.
@@ -150,10 +214,13 @@ export function pageRecorder(command) {
     step.url = w.location.href;
     steps.push(step);
     if (steps.length > MAX_STEPS) steps.shift();
+    badge(`● Recording · ${steps.filter((s) => s.type !== "start").length} steps`);
     return step;
   };
+  // The indicator badge isn't part of the page: what's done to it isn't recorded.
+  const onBadge = (event) => (event.composedPath ? event.composedPath() : []).some((n) => n && n.id === "__mcp_indicator");
   const listen = (target, type, fn) => {
-    const wrapped = (event) => { try { fn(event); } catch {} };
+    const wrapped = (event) => { try { if (!onBadge(event)) fn(event); } catch {} };
     target.addEventListener(type, wrapped, true);
     cleanups.push(() => target.removeEventListener(type, wrapped, true));
   };
@@ -275,4 +342,40 @@ export function pageRecorder(command) {
   listen(w, "hashchange", () => navigated("hashchange"));
 
   return "recording clicks, typing, keys, selects, submits, scrolls and in-app navigation";
+}
+
+// The page's indicator badge: a small pill in the bottom-right corner, one line per thing watching the page
+// ("● Recording · 12 steps", "● Capturing network"), so the user can see an agent is recording in their tab. Installs
+// window.__mcp_setIndicator(key, text); a null text removes that line, and the badge goes with the last one. It's in
+// its own shadow root (the page's styles can't reach it) and lets every click through.
+export function pageIndicator() {
+  const w = window;
+  if (w.__mcp_setIndicator) return;
+  const lines = new Map();
+  let host = null;
+  let box = null;
+  const render = () => {
+    if (!lines.size) {
+      if (host) host.remove();
+      host = box = null;
+      return;
+    }
+    if (!host || !host.isConnected) {
+      host = document.createElement("div");
+      host.id = "__mcp_indicator";
+      host.style.cssText = "all:initial;position:fixed;right:12px;bottom:12px;z-index:2147483647;pointer-events:none";
+      const root = host.attachShadow ? host.attachShadow({ mode: "open" }) : host;
+      box = document.createElement("div");
+      box.style.cssText = "font:600 12px/1.5 -apple-system,system-ui,sans-serif;color:#fff;background:rgba(200,30,30,.88);" +
+        "padding:4px 10px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.25);white-space:nowrap";
+      root.appendChild(box);
+      (document.body || document.documentElement).appendChild(host);
+    }
+    box.textContent = [...lines.values()].join("   ");
+  };
+  w.__mcp_setIndicator = (key, text) => {
+    if (text) lines.set(key, text);
+    else lines.delete(key);
+    render();
+  };
 }
