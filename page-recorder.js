@@ -23,7 +23,8 @@ export function pageRecorder(command, options) {
 
   const MAX_STEPS = 2000;
   const started = Date.now();
-  const steps = w.__mcp_recording && w.__mcp_recording.steps ? w.__mcp_recording.steps : [];
+  // A new recording starts empty: an earlier, stopped one's steps would read as this one's.
+  const steps = [];
   const cleanups = [];
   const startedIso = new Date(started).toISOString();
   const requestCount = () => (w.__mcp_network || []).filter((r) => r.time >= startedIso).length;

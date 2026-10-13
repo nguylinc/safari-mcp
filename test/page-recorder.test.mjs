@@ -146,3 +146,11 @@ test("recording with the network: one line counting steps and the requests since
     "the capture, still running, gets its own line back");
   window.__mcp_setIndicator("network", null);
 });
+
+test("starting again after a stop begins an empty recording", () => {
+  const { document, fire } = page(`<button>Go</button>`);
+  fire(document.querySelector("button"), "click", { button: 0, detail: 1 });
+  pageRecorder("stop");
+  pageRecorder();
+  assert.deepEqual(window.__mcp_recording.steps.map((s) => s.type), ["start"]);
+});
