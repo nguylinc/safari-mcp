@@ -15,7 +15,7 @@ import { VIEWPORT_SCRIPT, SAFE_AREA_SCRIPT, PWA_SCRIPT, WEBKIT_COMPAT_SCRIPT, AL
 import { escJsSingleQuote, escAppleScriptString } from "./injected-escape.js";
 import { currentSessionId } from "./session-context.js";
 import { allowUserTabs } from "./ownership-state.js";
-import { pageIndicator, pageRecorder } from "./page-recorder.js";
+import { pageScriptSource } from "./page-scripts.js";
 // Extension bridge is handled by index.js (WebSocket server on port 9223)
 
 const execFileAsync = promisify(execFile);
@@ -6206,119 +6206,55 @@ export async function waitForTime({ ms }) {
   return capped < Number(ms) ? `Waited ${capped}ms (capped from ${ms}ms — max 60s)` : `Waited ${ms}ms`;
 }
 
-// ========== NETWORK CAPTURE (Detailed) ==========
+// ========== NETWORK CAPTURE (Detailed) and INTERACTION RECORDING (rinkagu fork) ==========
+// The page code is page-scripts.js (the capture) and page-recorder.js (the recorder and badge). index.js sends these
+// steps to the extension's page_script, which runs them compiled in, past the page's CSP, in the session's tab; the
+// functions below are its AppleScript fallback (the same code as one script string), which reaches only the window's
+// front tab.
 
-// The page-side capture. Each entry is recorded when the request starts and filled in as it completes:
-// the method (from the init or, for fetch(new Request(...)), the Request itself, which the
-// arguments-only version reported as GET), the request's headers and body, and the response's status,
-// headers and body (bodies cut at REQ_MAX / RESP_MAX). Entries keep the old fields (`headers` is the
-// response's), so earlier readers still work. A body that isn't text (FormData, a Blob) is named, not read.
-export const NETWORK_CAPTURE_JS = `if(!window.__mcp_network){window.__mcp_network=[];
-    var MAX=1000,REQ_MAX=20000,RESP_MAX=8000;
-    var keep=function(e){window.__mcp_network.push(e);if(window.__mcp_network.length>MAX)window.__mcp_network.shift();return e;};
-    var cut=function(s,n){return typeof s==='string'&&s.length>n?s.slice(0,n)+'...['+s.length+' chars]':s;};
-    var bodyText=function(b){if(b==null)return null;if(typeof b==='string')return b;if(b instanceof URLSearchParams)return b.toString();
-      return '['+Object.prototype.toString.call(b).slice(8,-1)+']';};
-    var SECRET=/^(authorization|proxy-authorization|cookie|set-cookie|x-amz-security-token)$|token|csrf|xsrf|secret|session|api-?key|password/i;
-    var hideValue=function(k,v){return SECRET.test(k)?'<redacted>':v;};
-    var redactHeaders=function(o){var out={};for(var k in o)out[k]=hideValue(k,o[k]);return out;};
-    var redactUrl=function(u){try{var x=new URL(u,location.href);var hit=false;x.searchParams.forEach(function(v,k){if(SECRET.test(k)||/^(code|sig|signature|id_token|access_token)$/i.test(k))hit=true;});
-      if(!hit)return String(u);var p=new URLSearchParams();x.searchParams.forEach(function(v,k){p.append(k,SECRET.test(k)||/^(code|sig|signature|id_token|access_token)$/i.test(k)?'<redacted>':v);});
-      x.search=p.toString();return x.toString();}catch(e){return String(u);}};
-    var headersOf=function(h){try{return redactHeaders(Object.fromEntries(new Headers(h||{}).entries()));}catch(e){return {};}};
-    var origFetch=window.fetch;
-    window.fetch=function(input,init){var req=(typeof Request!=='undefined'&&input instanceof Request)?input:null;var opts=init||{};var start=Date.now();
-      var entry=keep({url:redactUrl(req?req.url:String(input)),method:(opts.method||(req&&req.method)||'GET').toUpperCase(),type:'fetch',
-        requestHeaders:headersOf(opts.headers||(req&&req.headers)),requestBody:null,time:new Date().toISOString()});
-      if('body' in opts)entry.requestBody=cut(bodyText(opts.body),REQ_MAX);
-      else if(req&&entry.method!=='GET'&&entry.method!=='HEAD'){try{req.clone().text().then(function(t){entry.requestBody=cut(t,REQ_MAX);},function(){});}catch(e){}}
-      return origFetch.apply(this,arguments).then(function(resp){
-        entry.status=resp.status;entry.statusText=resp.statusText;entry.duration=Date.now()-start;
-        entry.headers=redactHeaders(Object.fromEntries([...resp.headers.entries()]));
-        try{resp.clone().text().then(function(t){entry.responseBody=cut(t,RESP_MAX);},function(){});}catch(e){}
-        return resp;
-      }).catch(function(err){entry.error=err.message;entry.duration=Date.now()-start;throw err;});
-    };
-    var origOpen=XMLHttpRequest.prototype.open,origSend=XMLHttpRequest.prototype.send,origSetHeader=XMLHttpRequest.prototype.setRequestHeader;
-    XMLHttpRequest.prototype.open=function(method,url){
-      this.__mcp_entry={url:redactUrl(String(url)),method:String(method).toUpperCase(),type:'xhr',requestHeaders:{},requestBody:null};
-      return origOpen.apply(this,arguments);
-    };
-    XMLHttpRequest.prototype.setRequestHeader=function(name,value){if(this.__mcp_entry)this.__mcp_entry.requestHeaders[name]=hideValue(name,value);return origSetHeader.apply(this,arguments);};
-    XMLHttpRequest.prototype.send=function(body){var entry=this.__mcp_entry;
-      if(entry){var start=Date.now();entry.time=new Date().toISOString();entry.requestBody=cut(bodyText(body),REQ_MAX);keep(entry);
-        this.addEventListener('load',function(){entry.status=this.status;entry.statusText=this.statusText;entry.duration=Date.now()-start;
-          try{entry.responseBody=cut(this.responseText,RESP_MAX);entry.responseSize=this.responseText.length;}catch(e){}});
-        this.addEventListener('error',function(){entry.error='Network error';entry.duration=Date.now()-start;});}
-      return origSend.apply(this,arguments);
-    };}`;
+// The capture keeps going after a recording stops; it has no stop.
+export const networkCaptureSteps = () => [["networkCapture"], ["pageIndicator"], ["networkBadge"]];
+export const networkClearSteps = () => [["networkClear"]];
+export const networkDetailsSteps = ({ limit = 50, filter } = {}) => [["networkDetails", Number(limit) || 50, filter || null]];
 
-// The capture, and its line on the page's indicator badge (page-recorder.js).
-export function networkCaptureScript() {
-  // Its own badge line, counting live, unless a recording that captures the network already counts the requests.
-  return `${NETWORK_CAPTURE_JS};(${pageIndicator})();(function(){var r=window.__mcp_recording;if(r&&r.active&&r.network)return;` +
-    `window.__mcp_setIndicator("network",function(){var n=(window.__mcp_network||[]).length;return "● Capturing network · "+n+" request"+(n===1?"":"s");});})()`;
+// Starting a recording also captures the page's requests unless `network` is false: the capture first, then the
+// badge, then the recorder, whose answer is the tool's.
+export function recorderSteps(command, { network = true } = {}) {
+  const capture = !command && network;
+  return [...(capture ? [["networkCapture"]] : []), ["pageIndicator"], ["pageRecorder", command || null, { network: capture }]];
 }
 
+// The recording and its requests, bodies cut to BODY_MAX so a long recording still fits in one answer.
+const BODY_MAX = 2000;
+export function recordingReadSteps({ limit = 200, clear = false } = {}) {
+  return [["recordingRead", Math.max(1, Math.min(2000, Number(limit) || 200)), !!clear, BODY_MAX]];
+}
+
+const runSteps = (steps) => runJS(pageScriptSource(steps));
+
 export async function startNetworkCapture() {
-  await runJS(networkCaptureScript());
+  await runSteps(networkCaptureSteps());
   return "Network capture started (fetch + XHR interception)";
 }
 
-export const NETWORK_CLEAR_JS = "window.__mcp_network=[]; 'Network capture cleared'";
-
 export async function clearNetworkCapture() {
-  return runJS(NETWORK_CLEAR_JS);
-}
-
-// The scripts are also what index.js sends through the extension's evaluate (the session's tab); runJS, used by the
-// functions here, is its AppleScript fallback and reaches only the window's front tab.
-export function networkDetailsScript({ limit = 50, filter } = {}) {
-  const filterStr = filter ? `.filter(function(r){return r.url.includes('${escJsSingleQuote(filter)}')})` : "";
-  return `JSON.stringify((window.__mcp_network||[])${filterStr}.slice(-${Number(limit)}))`;
+  return runSteps(networkClearSteps());
 }
 
 export async function getNetworkDetails(args = {}) {
-  return runJS(networkDetailsScript(args));
-}
-
-// ========== INTERACTION RECORDING (rinkagu fork) ==========
-// What the user does in the page, as steps that replay with safari-mcp calls: page-recorder.js. index.js sends these
-// scripts through the extension's evaluate, which runs in the session's tab; the functions below are its AppleScript
-// fallback, which can only reach the window's front tab.
-
-// Starting a recording also captures the page's requests unless `network` is false: the network capture first (it
-// keeps going after the recording stops; it has no stop), then the badge, then the recorder. All one expression,
-// since the extension's evaluate keeps only that value (the recorder's answer).
-export function recorderScript(command, { network = true } = {}) {
-  const capture = !command && network;
-  return `(function(){${capture ? `${NETWORK_CAPTURE_JS};` : ""}(${pageIndicator})();` +
-    `return (${pageRecorder})(${command ? JSON.stringify(command) : "undefined"}, ${JSON.stringify({ network: capture })});})()`;
-}
-
-// The recording and, when it captures the network, the requests made since it started (bodies cut to BODY_MAX, so a
-// long recording still fits in one answer). automation.js's linkRecording ties them to the steps.
-const BODY_MAX = 2000;
-export function recordingReadScript({ limit = 200, clear = false } = {}) {
-  const n = Math.max(1, Math.min(2000, Number(limit) || 200));
-  return `(function(){var r=window.__mcp_recording;if(!r)return JSON.stringify({recording:false,steps:[]});` +
-    `var cut=function(s){return typeof s==='string'&&s.length>${BODY_MAX}?s.slice(0,${BODY_MAX})+'...['+s.length+' chars]':s;};` +
-    `var net=r.network?(window.__mcp_network||[]).filter(function(e){return e.time>=r.started;}).map(function(e){` +
-    `var c={};for(var k in e)c[k]=e[k];c.requestBody=cut(e.requestBody);c.responseBody=cut(e.responseBody);return c;}):null;` +
-    `var out=JSON.stringify({recording:r.active,network:!!r.network,started:r.started,total:r.steps.length,steps:r.steps.slice(-${n}),requests:net});` +
-    `${clear ? "r.steps.length=0;" : ""}return out;})()`;
+  return runSteps(networkDetailsSteps(args));
 }
 
 export async function startRecording(options = {}) {
-  return runJS(recorderScript(undefined, options));
+  return runSteps(recorderSteps(undefined, options));
 }
 
 export async function stopRecording() {
-  return runJS(recorderScript("stop"));
+  return runSteps(recorderSteps("stop"));
 }
 
 export async function getRecording(args = {}) {
-  return runJS(recordingReadScript(args));
+  return runSteps(recordingReadSteps(args));
 }
 
 // ========== PERFORMANCE METRICS ==========

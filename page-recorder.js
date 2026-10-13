@@ -34,13 +34,13 @@ export function pageRecorder(command, options) {
     for (const undo of cleanups.splice(0)) undo();
     setLine("recording", null);
     // The capture keeps going after the recording stops (it has no stop): its own line says so again.
-    if (network && w.__mcp_network) setLine("network", () => `● Capturing network · ${(w.__mcp_network || []).length} requests`);
+    if (network && w.__mcp_network) setLine("network", () => `\u25cf Capturing network \u00b7 ${(w.__mcp_network || []).length} requests`);
   } };
   w.__mcp_recording = rec;
   if (network) setLine("network", null);
   const recordingLine = () => {
     const n = steps.filter((s) => s.type !== "start").length;
-    return `● Recording · ${n} step${n === 1 ? "" : "s"}${network ? ` · ${requestCount()} request${requestCount() === 1 ? "" : "s"}` : ""}`;
+    return `\u25cf Recording \u00b7 ${n} step${n === 1 ? "" : "s"}${network ? ` \u00b7 ${requestCount()} request${requestCount() === 1 ? "" : "s"}` : ""}`;
   };
   setLine("recording", recordingLine);
 

@@ -67,6 +67,7 @@
     "response.js",
     "safari.js",
     "page-recorder.js",
+    "page-scripts.js",
     "automation.js",
     "session-context.js",
     "ownership-match.js",

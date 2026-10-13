@@ -5,6 +5,7 @@
  *
  * Run:  node --test test/page-recorder.test.mjs
  */
+/* global window, document -- each test sets them to its jsdom page, as the recorder expects */
 import assert from "node:assert";
 import { test } from "node:test";
 import { JSDOM } from "jsdom";

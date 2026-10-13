@@ -12,6 +12,7 @@ import { currentSessionId } from "./session-context.js";
 import { z } from "zod";
 import * as safari from "./safari.js";
 import { linkRecording, recordingToAutomation } from "./automation.js";
+import { pageScriptSource } from "./page-scripts.js";
 import { textResult, jsonResult, imageResult, errorResult, evalResult } from "./response.js";
 import {
   OWNERSHIP_DIR, BLANK_TAB_SENTINEL,
@@ -4409,15 +4410,25 @@ server.tool(
 
 // ========== NETWORK CAPTURE (Detailed) ==========
 
+// The network and recording tools' page code (page-scripts.js) goes to the extension's page_script, which runs it as
+// compiled functions in the session's tab (an adopted one included), past the page's CSP. An extension built before
+// page_script answers "Unknown command": it gets the same code as one string through evaluate. `fallback`, AppleScript,
+// reaches only the window's front tab.
+async function runPageSteps(steps, args, fallback) {
+  try {
+    return await extensionOrFallback("page_script", { steps, ..._explicitReceipt(args) }, fallback);
+  } catch (err) {
+    if (!/Unknown command: page_script/.test(err?.message || "")) throw err;
+    return extensionOrFallback("evaluate", { script: pageScriptSource(steps), ..._explicitReceipt(args) }, fallback);
+  }
+}
+
 server.tool(
   "safari_start_network_capture",
   "Start capturing detailed network requests (fetch + XHR): method, URL, request headers and body, response status, headers and body (bodies truncated), timing. Call once per page. Intercepts fetch/XHR — captures requests AFTER this call only. For quick overview of already-loaded resources, use safari_network instead.",
   { receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)") },
-  // The network tools run through the extension's evaluate, so they act on the session's tab (an adopted one
-  // included); runJS, their fallback, reaches only the window's front tab.
   async (args) => {
-    await extensionOrFallback("evaluate", { script: safari.networkCaptureScript(), ..._explicitReceipt(args) },
-      () => safari.startNetworkCapture());
+    await runPageSteps(safari.networkCaptureSteps(), args, () => safari.startNetworkCapture());
     return textResult("Network capture started (fetch + XHR interception)");
   }
 );
@@ -4430,16 +4441,14 @@ server.tool(
     limit: z.coerce.number().optional().describe("Max requests (default: 50)"),
     filter: z.string().optional().describe("Filter by URL substring"),
   },
-  async (args) => evalResult(await extensionOrFallback(
-    "evaluate", { script: safari.networkDetailsScript(args), ..._explicitReceipt(args) }, () => safari.getNetworkDetails(args)))
+  async (args) => evalResult(await runPageSteps(safari.networkDetailsSteps(args), args, () => safari.getNetworkDetails(args)))
 );
 
 server.tool(
   "safari_clear_network",
   "Clear all captured network requests",
   { receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)") },
-  async (args) => evalResult(await extensionOrFallback(
-    "evaluate", { script: safari.NETWORK_CLEAR_JS, ..._explicitReceipt(args) }, () => safari.clearNetworkCapture()))
+  async (args) => evalResult(await runPageSteps(safari.networkClearSteps(), args, () => safari.clearNetworkCapture()))
 );
 
 server.tool(
@@ -4449,10 +4458,7 @@ server.tool(
     receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)"),
     network: z.boolean().optional().describe("Also capture the page's requests (default: true)"),
   },
-  // Through the extension's evaluate, like safari_evaluate, so it runs in the session's tab (an adopted one
-  // included); runJS, the fallback, reaches only the window's front tab.
-  async (args) => evalResult(await extensionOrFallback(
-    "evaluate", { script: safari.recorderScript(undefined, { network: args.network !== false }), ..._explicitReceipt(args) },
+  async (args) => evalResult(await runPageSteps(safari.recorderSteps(undefined, { network: args.network !== false }), args,
     () => safari.startRecording({ network: args.network !== false })))
 );
 
@@ -4468,9 +4474,8 @@ server.tool(
     server: z.string().optional().describe("With format automation: the MCP server to replay it through (e.g. safari-amazon)"),
   },
   async (args) => {
-    const raw = await extensionOrFallback(
-      "evaluate", { script: safari.recordingReadScript({ ...args, limit: args.format === "automation" ? 2000 : args.limit }),
-        ..._explicitReceipt(args) }, () => safari.getRecording(args));
+    const readArgs = { ...args, limit: args.format === "automation" ? 2000 : args.limit };
+    const raw = await runPageSteps(safari.recordingReadSteps(readArgs), args, () => safari.getRecording(readArgs));
     let recording;
     try {
       recording = typeof raw === "string" ? JSON.parse(raw) : raw;
@@ -4486,8 +4491,7 @@ server.tool(
   "safari_stop_recording",
   "Stop recording interactions in this tab (the steps stay readable with safari_get_recording).",
   { receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)") },
-  async (args) => evalResult(await extensionOrFallback(
-    "evaluate", { script: safari.recorderScript("stop"), ..._explicitReceipt(args) }, () => safari.stopRecording()))
+  async (args) => evalResult(await runPageSteps(safari.recorderSteps("stop"), args, () => safari.stopRecording()))
 );
 
 // ========== PERFORMANCE METRICS ==========

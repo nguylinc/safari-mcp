@@ -8,11 +8,10 @@
  */
 import assert from "node:assert";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
 import vm from "node:vm";
+import { networkCapture } from "../page-scripts.js";
 
-const safari = readFileSync(new URL("../safari.js", import.meta.url), "utf8");
-const script = safari.match(/export const NETWORK_CAPTURE_JS = `([\s\S]*?)`;/)[1];
+const script = `(${networkCapture})()`;
 
 // A page with a fetch that answers every request, and a minimal XMLHttpRequest.
 function page() {

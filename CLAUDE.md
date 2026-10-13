@@ -37,9 +37,15 @@ export's review points out a step that made a write, as one an API command could
 auth values: header values like `authorization`, `cookie` and csrf tokens, and URL parameters like `id_token`, are
 `<redacted>`, names kept.
 
-The recording and network tools send their scripts through the extension's `evaluate` (like `safari_evaluate`), so
-they act on the session's tab, an adopted one included. Upstream's network tools used `runJS`, AppleScript's
-`do JavaScript`, which only reaches the profile window's front tab; it's kept as their fallback.
+The recording and network tools run their page code compiled into the extension: a new `page_script` command runs
+named functions in the session's tab (an adopted one included) through `execInTab`, which a page's CSP can't refuse,
+where `evaluate`'s script strings need eval or an inline script (mcm.amazon.dev refuses both). The code lives in
+`page-scripts.js` (the network capture and readers) and `page-recorder.js`; `scripts/sync-page-scripts.mjs` copies
+them into the generated block at the end of `background.js`, and `test/page-scripts.test.mjs` fails while that copy is
+stale. So a change to either file needs the sync and an extension rebuild (`dotfiles/mac/safari-mcp-extension.sh
+--notarize`). An extension built before `page_script` answers "Unknown command", and the daemon (`runPageSteps` in
+`index.js`) then sends the same code as one string through `evaluate`. Upstream's network tools used `runJS`,
+AppleScript's `do JavaScript`, which only reaches the profile window's front tab; it's kept as their fallback.
 
 Keep the diff this small. Many tests cut functions out of `background.js` by marker (`between(background, "...",
 "...")`) and run them with injected helpers: new helpers or top-level statements placed inside such a range, or a new
