@@ -3,7 +3,7 @@
 Fork of achiya-automation/safari-mcp, used by the rinkagu setup (Claude Code on hetzner driving the user's Safari on the
 work Mac). Branch `rinkagu` is what we run; `main` tracks upstream (`git fetch upstream`). Everything about building,
 signing, installing and running it lives in the rinkagu repo, not here: `dotfiles/mac/safari-mcp-install.sh` (the daemon),
-`dotfiles/mac/safari-mcp-extension.sh` (the Safari extension), `bin/chrome-mcp/safari-real-tunnel`, and the
+`dotfiles/mac/safari-mcp-extension.sh` (the Safari extension), `bin/chrome-mcp/safari-personal-tunnel and safari-amazon-tunnel`, and the
 `local-tunnel` skill.
 
 ## What differs from upstream
