@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="social-preview.png" alt="Safari MCP Server — 98 native browser automation tools for AI agents on macOS" width="100%">
+<img src="social-preview.png" alt="Safari MCP Server — 101 native browser automation tools for AI agents on macOS" width="100%">
 
 <br/>
 
@@ -19,9 +19,9 @@
 [VS Code Insiders](https://insiders.vscode.dev/redirect?url=vscode-insiders:mcp/install?%7B%22safari-mcp%22%3A%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22safari-mcp%22%5D%7D%7D) ·
 [Install in Cursor](cursor://anysphere.cursor-deeplink/mcp/install?name=safari-mcp&config=%7B%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22safari-mcp%22%5D%7D)
 
-**98 tools** · **No Chrome/Puppeteer/Playwright needed** · **~5ms per command** · **60% less CPU than Chrome**
+**101 tools** · **No Chrome/Puppeteer/Playwright needed** · **~5ms per command** · **60% less CPU than Chrome**
 
-[Quick Start](#quick-start) · [All 98 Tools](#tools-98) · [Examples](examples/) · [Why Safari MCP?](#safari-mcp-vs-alternatives) · [Architecture](#architecture) · [Changelog](CHANGELOG.md)
+[Quick Start](#quick-start) · [All 101 Tools](#tools-101) · [Examples](examples/) · [Why Safari MCP?](#safari-mcp-vs-alternatives) · [Architecture](#architecture) · [Changelog](CHANGELOG.md)
 
 ![Safari MCP Demo](https://github.com/achiya-automation/safari-mcp/raw/main/assets/safari-mcp-promo.gif)
 
@@ -39,17 +39,17 @@ Your AI agent needs to browse. So it either:
 
 Your AI drives the **Safari you're already logged into** — Gmail, GitHub, Ahrefs, Slack, banking.
 
-Native WebKit. ~60% less CPU. Background operation. 98 tools. One `npx` command. macOS only.
+Native WebKit. ~60% less CPU. Background operation. 101 tools. One `npx` command. macOS only.
 
 > 📰 **Featured on freeCodeCamp:** [How to Connect Your AI Coding Agent to a Browser on macOS](https://www.freecodecamp.org/news/how-to-connect-your-ai-coding-agent-to-a-browser-on-macos/) · [HackerNoon: Reverse-Engineering React, Shadow DOM, and CSP](https://hackernoon.com/i-had-to-reverse-engineer-react-shadow-dom-and-csp-to-automate-safari-without-chrome)
 
-> 🍎 **Apple ships an official Safari MCP** — `safaridriver --mcp`, first in Safari Technology Preview 247 (July 2026) and in stable Safari since 27.0. It drives an isolated automation session for debugging. safari-mcp drives the **real Safari you're already logged into** — your cookies and sessions, in the background, with 98 tools. See the full comparison below.
+> 🍎 **Apple ships an official Safari MCP** — `safaridriver --mcp`, first in Safari Technology Preview 247 (July 2026) and in stable Safari since 27.0. It drives an isolated automation session for debugging. safari-mcp drives the **real Safari you're already logged into** — your cookies and sessions, in the background, with 101 tools. See the full comparison below.
 
 ---
 
 ## Highlights
 
-- **98 tools** — navigation, clicks, forms, screenshots, network, storage, accessibility, and more
+- **101 tools** — navigation, clicks, forms, screenshots, network, storage, accessibility, and more
 - **Zero heat** — native WebKit on Apple Silicon, ~60% less CPU than Chrome
 - **Your real browser** — keeps all logins, cookies, sessions (Gmail, GitHub, Ahrefs, etc.)
 - **Background operation** — Safari stays in the background, no window stealing
@@ -391,7 +391,7 @@ What the flag deliberately does *not* do:
 
 ---
 
-## Tools (98)
+## Tools (101)
 
 <details>
 <summary><b>Click to expand the full tool list — organized by category</b></summary>
@@ -577,6 +577,13 @@ What the flag deliberately does *not* do:
 | Tool | Description |
 |------|-------------|
 | `safari_run_script` | Run multiple actions in a single call (batch) |
+
+### Recording (3)
+| Tool | Description |
+|------|-------------|
+| `safari_start_recording` | Record what the user does in the tab (clicks, typing, keys, selects, scrolls, navigation) |
+| `safari_get_recording` | The recorded steps, each with a selector and the safari-mcp call that replays it |
+| `safari_stop_recording` | Stop recording (the steps stay readable) |
 
 ### Native Input — CGEvent (4)
 | Tool | Description |

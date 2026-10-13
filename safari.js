@@ -15,6 +15,7 @@ import { VIEWPORT_SCRIPT, SAFE_AREA_SCRIPT, PWA_SCRIPT, WEBKIT_COMPAT_SCRIPT, AL
 import { escJsSingleQuote, escAppleScriptString } from "./injected-escape.js";
 import { currentSessionId } from "./session-context.js";
 import { allowUserTabs } from "./ownership-state.js";
+import { pageRecorder } from "./page-recorder.js";
 // Extension bridge is handled by index.js (WebSocket server on port 9223)
 
 const execFileAsync = promisify(execFile);
@@ -6259,6 +6260,26 @@ export async function getNetworkDetails({ limit = 50, filter } = {}) {
   const filterStr = filter ? `.filter(function(r){return r.url.includes('${escJsSingleQuote(filter)}')})` : "";
   return runJS(
     `JSON.stringify((window.__mcp_network||[])${filterStr}.slice(-${Number(limit)}))`
+  );
+}
+
+// ========== INTERACTION RECORDING (rinkagu fork) ==========
+// What the user does in the page, as steps that replay with safari-mcp calls: page-recorder.js.
+
+export async function startRecording() {
+  return runJS(`(${pageRecorder})()`);
+}
+
+export async function stopRecording() {
+  return runJS(`(${pageRecorder})("stop")`);
+}
+
+export async function getRecording({ limit = 200, clear = false } = {}) {
+  const n = Math.max(1, Math.min(2000, Number(limit) || 200));
+  return runJS(
+    `(function(){var r=window.__mcp_recording;if(!r)return JSON.stringify({recording:false,steps:[]});` +
+    `var out=JSON.stringify({recording:r.active,started:r.started,total:r.steps.length,steps:r.steps.slice(-${n})});` +
+    `${clear ? "r.steps.length=0;" : ""}return out;})()`
   );
 }
 

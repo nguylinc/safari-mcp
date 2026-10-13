@@ -4442,6 +4442,31 @@ server.tool(
   }
 );
 
+server.tool(
+  "safari_start_recording",
+  "Start recording what the USER does in this tab, to learn and automate it: clicks, double and right clicks, typing (one fill per field), special keys and shortcuts, selects, checkboxes, submits, scrolls and in-app navigation. Each step gets a selector (test id, id, role and name, label or placeholder, text, CSS path) and the safari-mcp call that does it again. Password values are never kept. Lives in the page: a full page load ends it. Read it with safari_get_recording.",
+  { receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)") },
+  async () => textResult(await safari.startRecording())
+);
+
+server.tool(
+  "safari_get_recording",
+  "Get the steps safari_start_recording has recorded: each with its type, selector, role, name, value and the safari-mcp `tool` call that replays it.",
+  {
+    receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)"),
+    limit: z.coerce.number().optional().describe("Max steps, the latest (default: 200)"),
+    clear: z.boolean().optional().describe("Empty the recording after reading it (it keeps recording)"),
+  },
+  async (args) => textResult(await safari.getRecording(args))
+);
+
+server.tool(
+  "safari_stop_recording",
+  "Stop recording interactions in this tab (the steps stay readable with safari_get_recording).",
+  { receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)") },
+  async () => textResult(await safari.stopRecording())
+);
+
 // ========== PERFORMANCE METRICS ==========
 
 server.tool(

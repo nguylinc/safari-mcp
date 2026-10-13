@@ -20,6 +20,14 @@ And `safari_start_network_capture` records enough to replay a request: the metho
 (`NETWORK_CAPTURE_JS` in `safari.js`, daemon-side, so no extension rebuild). Tests:
 `test/network-capture-details.test.mjs`.
 
+And an interaction recorder, for learning what the user does in a page so it can be automated:
+`safari_start_recording` / `safari_get_recording` / `safari_stop_recording` (`index.js`, after the network tools)
+install `page-recorder.js` in the page through `safari.js`'s `startRecording` and friends. It records clicks, typing
+(one fill per field), special keys and shortcuts, selects, checkboxes, submits, scrolls and in-app navigation, each with
+a selector ranked like Playwright's recorder (`packages/injected/src/recorder/recorder.ts` and `selectorGenerator.ts`
+in microsoft/playwright, read for this) and the safari-mcp call that replays it; never a password's value. Daemon-side
+too, so it ends on a full page load. Tests: `test/page-recorder.test.mjs`.
+
 Keep the diff this small. Many tests cut functions out of `background.js` by marker (`between(background, "...",
 "...")`) and run them with injected helpers: new helpers or top-level statements placed inside such a range, or a new
 identifier in `_closeTabForSession`, `_removeOwnedTab` or the `onRemoved` listener, break dozens of tests. Put new code at
