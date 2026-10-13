@@ -6252,35 +6252,49 @@ export async function startNetworkCapture() {
   return "Network capture started (fetch + XHR interception)";
 }
 
+export const NETWORK_CLEAR_JS = "window.__mcp_network=[]; 'Network capture cleared'";
+
 export async function clearNetworkCapture() {
-  return runJS("window.__mcp_network=[]; 'Network capture cleared'");
+  return runJS(NETWORK_CLEAR_JS);
 }
 
-export async function getNetworkDetails({ limit = 50, filter } = {}) {
+// The scripts are also what index.js sends through the extension's evaluate (the session's tab); runJS, used by the
+// functions here, is its AppleScript fallback and reaches only the window's front tab.
+export function networkDetailsScript({ limit = 50, filter } = {}) {
   const filterStr = filter ? `.filter(function(r){return r.url.includes('${escJsSingleQuote(filter)}')})` : "";
-  return runJS(
-    `JSON.stringify((window.__mcp_network||[])${filterStr}.slice(-${Number(limit)}))`
-  );
+  return `JSON.stringify((window.__mcp_network||[])${filterStr}.slice(-${Number(limit)}))`;
+}
+
+export async function getNetworkDetails(args = {}) {
+  return runJS(networkDetailsScript(args));
 }
 
 // ========== INTERACTION RECORDING (rinkagu fork) ==========
-// What the user does in the page, as steps that replay with safari-mcp calls: page-recorder.js.
+// What the user does in the page, as steps that replay with safari-mcp calls: page-recorder.js. index.js sends these
+// scripts through the extension's evaluate, which runs in the session's tab; the functions below are its AppleScript
+// fallback, which can only reach the window's front tab.
+
+export function recorderScript(command) {
+  return command ? `(${pageRecorder})(${JSON.stringify(command)})` : `(${pageRecorder})()`;
+}
+
+export function recordingReadScript({ limit = 200, clear = false } = {}) {
+  const n = Math.max(1, Math.min(2000, Number(limit) || 200));
+  return `(function(){var r=window.__mcp_recording;if(!r)return JSON.stringify({recording:false,steps:[]});` +
+    `var out=JSON.stringify({recording:r.active,started:r.started,total:r.steps.length,steps:r.steps.slice(-${n})});` +
+    `${clear ? "r.steps.length=0;" : ""}return out;})()`;
+}
 
 export async function startRecording() {
-  return runJS(`(${pageRecorder})()`);
+  return runJS(recorderScript());
 }
 
 export async function stopRecording() {
-  return runJS(`(${pageRecorder})("stop")`);
+  return runJS(recorderScript("stop"));
 }
 
-export async function getRecording({ limit = 200, clear = false } = {}) {
-  const n = Math.max(1, Math.min(2000, Number(limit) || 200));
-  return runJS(
-    `(function(){var r=window.__mcp_recording;if(!r)return JSON.stringify({recording:false,steps:[]});` +
-    `var out=JSON.stringify({recording:r.active,started:r.started,total:r.steps.length,steps:r.steps.slice(-${n})});` +
-    `${clear ? "r.steps.length=0;" : ""}return out;})()`
-  );
+export async function getRecording(args = {}) {
+  return runJS(recordingReadScript(args));
 }
 
 // ========== PERFORMANCE METRICS ==========

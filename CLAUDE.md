@@ -28,6 +28,10 @@ a selector ranked like Playwright's recorder (`packages/injected/src/recorder/re
 in microsoft/playwright, read for this) and the safari-mcp call that replays it; never a password's value. Daemon-side
 too, so it ends on a full page load. Tests: `test/page-recorder.test.mjs`.
 
+The recording and network tools send their scripts through the extension's `evaluate` (like `safari_evaluate`), so
+they act on the session's tab, an adopted one included. Upstream's network tools used `runJS`, AppleScript's
+`do JavaScript`, which only reaches the profile window's front tab; it's kept as their fallback.
+
 Keep the diff this small. Many tests cut functions out of `background.js` by marker (`between(background, "...",
 "...")`) and run them with injected helpers: new helpers or top-level statements placed inside such a range, or a new
 identifier in `_closeTabForSession`, `_removeOwnedTab` or the `onRemoved` listener, break dozens of tests. Put new code at

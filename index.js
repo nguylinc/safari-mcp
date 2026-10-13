@@ -4411,10 +4411,13 @@ server.tool(
 server.tool(
   "safari_start_network_capture",
   "Start capturing detailed network requests (fetch + XHR): method, URL, request headers and body, response status, headers and body (bodies truncated), timing. Call once per page. Intercepts fetch/XHR — captures requests AFTER this call only. For quick overview of already-loaded resources, use safari_network instead.",
-  {},
-  async () => {
-    const result = await safari.startNetworkCapture();
-    return textResult(result);
+  { receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)") },
+  // The network tools run through the extension's evaluate, so they act on the session's tab (an adopted one
+  // included); runJS, their fallback, reaches only the window's front tab.
+  async (args) => {
+    await extensionOrFallback("evaluate", { script: safari.NETWORK_CAPTURE_JS, ..._explicitReceipt(args) },
+      () => safari.startNetworkCapture());
+    return textResult("Network capture started (fetch + XHR interception)");
   }
 );
 
@@ -4426,27 +4429,26 @@ server.tool(
     limit: z.coerce.number().optional().describe("Max requests (default: 50)"),
     filter: z.string().optional().describe("Filter by URL substring"),
   },
-  async (args) => {
-    const result = await safari.getNetworkDetails(args);
-    return textResult(result);
-  }
+  async (args) => evalResult(await extensionOrFallback(
+    "evaluate", { script: safari.networkDetailsScript(args), ..._explicitReceipt(args) }, () => safari.getNetworkDetails(args)))
 );
 
 server.tool(
   "safari_clear_network",
   "Clear all captured network requests",
-  {},
-  async () => {
-    const result = await safari.clearNetworkCapture();
-    return textResult(result);
-  }
+  { receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)") },
+  async (args) => evalResult(await extensionOrFallback(
+    "evaluate", { script: safari.NETWORK_CLEAR_JS, ..._explicitReceipt(args) }, () => safari.clearNetworkCapture()))
 );
 
 server.tool(
   "safari_start_recording",
   "Start recording what the USER does in this tab, to learn and automate it: clicks, double and right clicks, typing (one fill per field), special keys and shortcuts, selects, checkboxes, submits, scrolls and in-app navigation. Each step gets a selector (test id, id, role and name, label or placeholder, text, CSS path) and the safari-mcp call that does it again. Password values are never kept. Lives in the page: a full page load ends it. Read it with safari_get_recording.",
   { receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)") },
-  async () => textResult(await safari.startRecording())
+  // Through the extension's evaluate, like safari_evaluate, so it runs in the session's tab (an adopted one
+  // included); runJS, the fallback, reaches only the window's front tab.
+  async (args) => evalResult(await extensionOrFallback(
+    "evaluate", { script: safari.recorderScript(), ..._explicitReceipt(args) }, () => safari.startRecording()))
 );
 
 server.tool(
@@ -4457,14 +4459,16 @@ server.tool(
     limit: z.coerce.number().optional().describe("Max steps, the latest (default: 200)"),
     clear: z.boolean().optional().describe("Empty the recording after reading it (it keeps recording)"),
   },
-  async (args) => textResult(await safari.getRecording(args))
+  async (args) => evalResult(await extensionOrFallback(
+    "evaluate", { script: safari.recordingReadScript(args), ..._explicitReceipt(args) }, () => safari.getRecording(args)))
 );
 
 server.tool(
   "safari_stop_recording",
   "Stop recording interactions in this tab (the steps stay readable with safari_get_recording).",
   { receipt: z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)") },
-  async () => textResult(await safari.stopRecording())
+  async (args) => evalResult(await extensionOrFallback(
+    "evaluate", { script: safari.recorderScript("stop"), ..._explicitReceipt(args) }, () => safari.stopRecording()))
 );
 
 // ========== PERFORMANCE METRICS ==========
