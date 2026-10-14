@@ -511,7 +511,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return false;
   }
   if (msg.action === "getStatus") {
-    sendResponse({ connected: isConnected, enabled: _enabled });
+    sendResponse({ connected: isConnected, enabled: _enabled, port: new URL(HTTP_URL).port });
     return false; // Synchronous response
   }
   return false;

@@ -15,15 +15,15 @@ async function check() {
   try {
     const resp = await browser.runtime.sendMessage({ action: "getStatus" });
     if (resp) {
-      if (resp.connected) { setStatus("connected", "Connected", "Port 9224"); return; }
+      if (resp.connected) { setStatus("connected", "Connected", resp.port ? `Port ${resp.port}` : "Connected to its profile's daemon"); return; }
       if (!resp.enabled) { setStatus("paused", "Paused", "Toggle to resume"); return; }
     }
   } catch {}
   // Fallback: read from storage
   const s = await getVal("mcpStatus", null);
-  if (s === "connected") setStatus("connected", "Connected", "Port 9224");
+  if (s === "connected") setStatus("connected", "Connected", "Connected to its profile's daemon");
   else if (s === "paused") setStatus("paused", "Paused", "Toggle to resume");
-  else if (s === "checking") setStatus("checking", "Connecting...", "Trying port 9224...");
+  else if (s === "checking") setStatus("checking", "Connecting...", "Looking for its profile's daemon...");
   else setStatus("disconnected", "Not connected", "Start the MCP server to connect");
 }
 document.getElementById("enableToggle").addEventListener("change", async (e) => {
