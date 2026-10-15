@@ -547,7 +547,19 @@ function handleEval(payload) {
         finish({ ok: false, csp: true, error: "eval is blocked by the page's CSP" });
         return;
       }
-      (async () => (0, eval)(source))().then(
+      // A top-level await or return runs as an async function's body, as in content.js.
+      const start = async () => {
+        let parses = true;
+        try { (0, eval)("if (0) {\n" + source + "\n}"); } catch (e) { parses = !(e instanceof SyntaxError); }
+        if (parses) return (0, eval)(source);
+        const AsyncFunction = (async () => {}).constructor;
+        let fn;
+        try { fn = new AsyncFunction("return (" + source.replace(/[\s;]+$/, "") + "\n);"); } catch (_) {
+          try { fn = new AsyncFunction(source); } catch (e) { throw new SyntaxError("SyntaxError: " + e.message); }
+        }
+        return fn();
+      };
+      start().then(
         (v) => {
           if (v === undefined || v === null) return finish({ ok: true, value: null });
           if (typeof v === "object") {

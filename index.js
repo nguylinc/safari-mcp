@@ -3778,7 +3778,7 @@ server.tool(
 
 server.tool(
   "safari_evaluate",
-  "Execute JavaScript in the current page (a returned Promise is awaited — fetch/timers work in background tabs; requestAnimationFrame never fires there). Automatically falls back to AppleScript when CSP blocks execution (e.g. Google Search Console, LinkedIn). For reading data, prefer safari_read_page or safari_snapshot. For interactions, prefer safari_click/fill with refs.",
+  "Execute JavaScript in the current page: an expression's value, or with statements, what `return` gives; top-level `await` works, and a returned Promise is awaited (fetch/timers work in background tabs; requestAnimationFrame never fires there). Where the page's CSP refuses eval it runs as an inline script with the page's nonce or Trusted Types policy; a script that doesn't parse answers its SyntaxError. Only where the CSP refuses both does it fall back to AppleScript, and a profile session (SAFARI_PROFILE) never does: it fails instead. For reading data, prefer safari_read_page or safari_snapshot. For interactions, prefer safari_click/fill with refs.",
   {
     script: z.string().describe("JavaScript code to execute"),
     frame: z.union([z.string(), z.number()]).optional().describe("Run inside a sub-frame instead of the main document: a frameId from safari_list_frames, or a substring of the frame's URL (must match exactly one). Needed for cross-origin iframes — micro-frontend app shells, embedded checkouts — where the main document only holds a loader."),

@@ -4495,6 +4495,9 @@ async function _evalRunner(runId, script, keepMs) {
   document.addEventListener(claim, (e) => e.preventDefault());
   const text = (v) => (v === undefined || v === null ? null : typeof v === "object" ? JSON.stringify(v) : String(v));
   const fail = (e) => ({ ok: false, error: String((e && e.message) || e) });
+  // A script that is not a valid script (a top-level await or return) runs as the body of an
+  // async function: as an expression first, so `await x` answers its value, then as statements.
+  const bodies = ["return (" + script.replace(/[\s;]+$/, "") + "\n);", script];
   const run = (async () => {
     // Strategy 1: indirect eval, where the page's CSP allows unsafe-eval. The "0" probe tells
     // a refused eval (nothing ran) from a script that throws by itself: that one ran, and
@@ -4502,7 +4505,21 @@ async function _evalRunner(runId, script, keepMs) {
     let evalAllowed = true;
     try { (0, eval)("0"); } catch (_) { evalAllowed = false; }
     if (evalAllowed) {
-      try { return { ok: true, value: text(await (0, eval)(script)) }; } catch (e) { return fail(e); }
+      // The script inside a block that never runs: a SyntaxError here means it did not parse, so
+      // nothing ran, where one thrown by the script itself (JSON.parse) comes after its effects.
+      let parses = true;
+      try { (0, eval)("if (0) {\n" + script + "\n}"); } catch (e) { parses = !(e instanceof SyntaxError); }
+      if (parses) {
+        try { return { ok: true, value: text(await (0, eval)(script)) }; } catch (e) { return fail(e); }
+      }
+      const AsyncFunction = (async () => {}).constructor;
+      let fn = null;
+      let syntaxError = null;
+      for (const body of bodies) {
+        try { fn = new AsyncFunction(body); break; } catch (e) { syntaxError = e; }
+      }
+      if (!fn) return { ok: false, error: "SyntaxError: " + String((syntaxError && syntaxError.message) || syntaxError) };
+      try { return { ok: true, value: text(await fn()) }; } catch (e) { return fail(e); }
     }
     // Strategy 2: an inline <script>, for pages that refuse eval but accept the Trusted Types
     // policy content.js registered at document_start, or the page's own nonce: a nonce-based
@@ -4511,6 +4528,9 @@ async function _evalRunner(runId, script, keepMs) {
     // started it, or nothing ran. It goes in as an expression first, so `document.title`
     // answers as through eval; a statement list is a SyntaxError there, which runs nothing,
     // and then goes in as a function body, where only `return` yields a value.
+    //
+    // A script the page accepted but that does not parse reports its SyntaxError to the window's
+    // error listeners, during appendChild; one the CSP refused reports nothing there.
     const hook = key + "_start";
     let started = null;
     window[hook] = (fn) => { started = (async () => fn())(); };
@@ -4519,9 +4539,16 @@ async function _evalRunner(runId, script, keepMs) {
       try { policy = window.trustedTypes.createPolicy("mcpEval_" + runId, { createScript: (c) => c }); } catch (_) { policy = null; }
     }
     const nonced = document.querySelector("script[nonce]");
-    for (const body of ["return (" + script.replace(/[\s;]+$/, "") + "\n);", script]) {
+    let compileError = null;
+    const onError = (e) => {
+      const err = e && e.error;
+      compileError = err && err.message ? (err.name || "SyntaxError") + ": " + err.message : String((e && e.message) || "SyntaxError");
+    };
+    for (const body of bodies) {
+      compileError = null;
+      window.addEventListener("error", onError, true);
       try {
-        const code = "window[" + JSON.stringify(hook) + "](function(){" + body + "\n})";
+        const code = "window[" + JSON.stringify(hook) + "](async function(){" + body + "\n})";
         const s = document.createElement("script");
         try { s.textContent = policy ? policy.createScript(code) : code; } catch (_) { s.textContent = code; }
         if (nonced && nonced.nonce) s.nonce = nonced.nonce;
@@ -4529,6 +4556,8 @@ async function _evalRunner(runId, script, keepMs) {
         s.remove();
       } catch (_) {
         // Trusted Types refused the plain string: the script did not start.
+      } finally {
+        window.removeEventListener("error", onError, true);
       }
       if (started) break;
     }
@@ -4536,6 +4565,7 @@ async function _evalRunner(runId, script, keepMs) {
     if (started) {
       try { return { ok: true, value: text(await started) }; } catch (e) { return fail(e); }
     }
+    if (compileError) return { ok: false, error: /^SyntaxError\b/.test(compileError) ? compileError : "SyntaxError: " + compileError };
     // Strategy 3: a Worker has its own CSP context - pure computation only, no DOM. A worker
     // that cannot start, or whose eval is refused too, ran nothing: say so ({csp}), so the
     // caller may still try AppleScript. Its script's own errors are only reported.

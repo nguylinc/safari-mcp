@@ -56,24 +56,46 @@ if (!window.__mcpEvalOnceBridge) {
       // so trying that first would fail on the very page this bridge exists for. The
       // "0" probe tells a refused eval (nothing ran) from a script that throws by
       // itself: that one ran, and must not run again through the <script> path.
+      // A script that is not a valid script (a top-level await or return) runs as the body of
+      // an async function, as background.js's _evalRunner runs it: an expression, then statements.
+      var bodies = ["return (" + source.replace(/[\s;]+$/, "") + "\n);", source];
       var evalAllowed = true;
       try { (0, eval)("0"); } catch (_e) { evalAllowed = false; }
       if (evalAllowed) {
-        try { return { ok: true, value: text(await (0, eval)(source)) }; } catch (e) { return fail(e); }
+        var parses = true;
+        try { (0, eval)("if (0) {\n" + source + "\n}"); } catch (e) { parses = !(e instanceof SyntaxError); }
+        if (parses) {
+          try { return { ok: true, value: text(await (0, eval)(source)) }; } catch (e) { return fail(e); }
+        }
+        var AsyncFunction = (async function () {}).constructor;
+        var fn = null;
+        var syntaxError = null;
+        for (var b = 0; b < bodies.length && !fn; b++) {
+          try { fn = new AsyncFunction(bodies[b]); } catch (e) { syntaxError = e; }
+        }
+        if (!fn) return { ok: false, error: "SyntaxError: " + String((syntaxError && syntaxError.message) || syntaxError) };
+        try { return { ok: true, value: text(await fn()) }; } catch (e) { return fail(e); }
       }
       // An inline script runs inside appendChild, so by the next line the hook has
       // started it — or nothing ran. A nonce-based script-src (facebook.com, since it no
       // longer allows 'unsafe-eval') takes it only with the page's nonce. It goes in as an
       // expression first, so `document.title` answers as through eval; a statement list
       // is a SyntaxError there, which runs nothing, and then goes in as a function body.
+      // One the page accepted but that does not parse reports to the window's error listeners.
       var hook = key + "_start";
       var started = null;
       window[hook] = function (fn) { started = (async function () { return fn(); })(); };
       var nonced = document.querySelector("script[nonce]");
-      var bodies = ["return (" + source.replace(/[\s;]+$/, "") + "\n);", source];
+      var compileError = null;
+      var onError = function (e) {
+        var err = e && e.error;
+        compileError = err && err.message ? (err.name || "SyntaxError") + ": " + err.message : String((e && e.message) || "SyntaxError");
+      };
       for (var i = 0; i < bodies.length && !started; i++) {
+        compileError = null;
+        window.addEventListener("error", onError, true);
         try {
-          var code = "window[" + JSON.stringify(hook) + "](function(){" + bodies[i] + "\n})";
+          var code = "window[" + JSON.stringify(hook) + "](async function(){" + bodies[i] + "\n})";
           var s = document.createElement("script");
           if (window.__mcpTrustedPolicy && typeof window.__mcpTrustedPolicy.createScript === "function") {
             try { s.textContent = window.__mcpTrustedPolicy.createScript(code); }
@@ -86,9 +108,14 @@ if (!window.__mcpEvalOnceBridge) {
           s.remove();
         } catch (_e) {
           // Trusted Types refused the plain string: the script did not start.
+        } finally {
+          window.removeEventListener("error", onError, true);
         }
       }
       delete window[hook];
+      if (!started && compileError) {
+        return { ok: false, error: /^SyntaxError\b/.test(compileError) ? compileError : "SyntaxError: " + compileError };
+      }
       if (!started) return { ok: false, csp: true, error: "the page's CSP blocks eval and inline scripts" };
       try { return { ok: true, value: text(await started) }; } catch (e) { return fail(e); }
     })();

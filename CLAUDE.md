@@ -47,6 +47,11 @@ stale. So a change to either file needs the sync and an extension rebuild (`dotf
 `index.js`) then sends the same code as one string through `evaluate`. Upstream's network tools used `runJS`,
 AppleScript's `do JavaScript`, which only reaches the profile window's front tab; it's kept as their fallback.
 
+`evaluate` runs a script that isn't a valid script (a top-level `await` or `return`) as an async function's body, in
+every strategy (`_evalRunner`, content.js's bridge, command-content.js's ISOLATED fallback), and a script that doesn't
+parse answers its SyntaxError: upstream's inline-script strategy wrapped it in a plain function, so a top-level `await`
+ran nothing and came back as a CSP block. Tests: `test/evaluate-at-most-once.test.mjs`.
+
 Keep the diff this small. Many tests cut functions out of `background.js` by marker (`between(background, "...",
 "...")`) and run them with injected helpers: new helpers or top-level statements placed inside such a range, or a new
 identifier in `_closeTabForSession`, `_removeOwnedTab` or the `onRemoved` listener, break dozens of tests. Put new code at

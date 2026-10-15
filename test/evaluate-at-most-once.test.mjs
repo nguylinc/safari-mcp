@@ -89,6 +89,7 @@ function fakePage({ injection = "answers", mainBridge = true, evalRefused = fals
   const bridgeMessages = [];
   const commandListeners = [];
   const messageListeners = [];
+  const errorListeners = [];
   const document = new EventTarget();
 
   const world = (name, globals) => {
@@ -99,10 +100,14 @@ function fakePage({ injection = "answers", mainBridge = true, evalRefused = fals
     w.document = document;
     w.__post = (what) => effects.push(`${name}:${what}`);
     // window.postMessage reaches every world's listeners, each seeing its own window as source.
-    w.addEventListener = (type, fn) => { if (type === "message") messageListeners.push({ self, fn }); };
+    w.addEventListener = (type, fn) => {
+      if (type === "message") messageListeners.push({ self, fn });
+      if (type === "error") errorListeners.push({ self, fn });
+    };
     w.removeEventListener = (type, fn) => {
-      const i = messageListeners.findIndex((l) => l.self === self && l.fn === fn);
-      if (i >= 0) messageListeners.splice(i, 1);
+      const list = type === "error" ? errorListeners : messageListeners;
+      const i = list.findIndex((l) => l.self === self && l.fn === fn);
+      if (i >= 0) list.splice(i, 1);
     };
     w.postMessage = (data) => {
       const sent = structuredClone(data);
@@ -137,11 +142,16 @@ function fakePage({ injection = "answers", mainBridge = true, evalRefused = fals
   // nonce-based page only when it carries the page's nonce.
   document.createElement = () => ({ textContent: "", nonce: "", remove() {} });
   document.querySelector = (selector) => (nonce && selector === "script[nonce]" ? { nonce } : null);
-  // A script that does not parse runs nothing; the browser reports it to onerror, not to appendChild.
+  // A script that does not parse runs nothing; the browser reports it to the page's window error
+  // listeners, during appendChild, not to appendChild itself. One the CSP refused reports nothing there.
+  const mainSelf = () => vm.runInContext("globalThis", worlds.MAIN);
   document.documentElement = {
     appendChild: (s) => {
       if (nonce && s.nonce !== nonce) return;
-      try { vm.runInContext(String(s.textContent), worlds.MAIN); } catch (e) { if (!(e instanceof SyntaxError)) throw e; }
+      try { vm.runInContext(String(s.textContent), worlds.MAIN); } catch (e) {
+        if (e?.name !== "SyntaxError") throw e;
+        for (const l of errorListeners.filter((l) => l.self === mainSelf())) l.fn({ message: "SyntaxError: " + e.message, error: e });
+      }
     },
   };
   if (mainBridge) vm.runInContext(CONTENT, worlds.MAIN);
@@ -289,6 +299,56 @@ describe("an evaluate starts its script at most once", { concurrency: true }, ()
     const page = fakePage({ evalRefused: true, nonce: "n0nce" });
     assert.equal(await page.evaluate('(async () => { __post("draft"); return "saved"; })()'), "saved");
     assert.deepEqual(page.effects, ["MAIN:draft"]);
+  });
+});
+
+describe("top-level await, and a script that does not parse", { concurrency: true }, () => {
+  const AWAITS = 'await Promise.resolve(); __post("read"); return "Console Home"';
+
+  test("the AWS console (nonce-based script-src): a top-level await runs, once", async () => {
+    const page = fakePage({ evalRefused: true, nonce: "n0nce" });
+    assert.equal(await page.evaluate(AWAITS), "Console Home");
+    assert.equal(await page.evaluate("await Promise.resolve(6 * 7)"), "42");
+    assert.deepEqual(page.effects, ["MAIN:read"]);
+  });
+
+  test("a page that allows eval runs a top-level await or return the same way, once", async () => {
+    const page = fakePage();
+    assert.equal(await page.evaluate(AWAITS), "Console Home");
+    assert.equal(await page.evaluate("await Promise.resolve(6 * 7)"), "42");
+    assert.equal(await page.evaluate('__post("plain"); return 1 + 1'), "2");
+    assert.equal(await page.evaluate("6 * 7"), "42");
+    assert.deepEqual(page.effects, ["MAIN:read", "MAIN:plain"]);
+  });
+
+  test("a SyntaxError the script throws itself, after its effect, is reported and not run again", async () => {
+    const page = fakePage();
+    assert.match(await page.evaluate('__post("once"); JSON.parse("{")'), /^Error: /);
+    await settle();
+    assert.deepEqual(page.effects, ["MAIN:once"]);
+  });
+
+  test("a script that does not parse answers its SyntaxError, not a CSP block, with or without eval", async () => {
+    for (const options of [{}, { evalRefused: true, nonce: "n0nce" }, { evalRefused: true }]) {
+      const page = fakePage(options);
+      const result = await page.evaluate('__post("never"); return (');
+      assert.match(result, /^Error: SyntaxError: /, JSON.stringify(options));
+      assert.doesNotMatch(result, /CSP/);
+      assert.deepEqual(page.effects, []);
+    }
+  });
+
+  test("the content bridge, on a nonce page whose injection never starts: a top-level await runs once", async () => {
+    const page = fakePage({ evalRefused: true, nonce: "n0nce", injection: "never" });
+    assert.equal(await page.evaluate(AWAITS), "Console Home");
+    assert.match(await page.evaluate("return ("), /^Error: SyntaxError: /);
+    assert.deepEqual(page.effects, ["MAIN:read"]);
+  });
+
+  test("the ISOLATED fallback (no content.js in MAIN) runs a top-level await too", async () => {
+    const page = fakePage({ mainBridge: false, injection: "never" });
+    assert.equal(await page.evaluate('await Promise.resolve(); __post("read"); return "ok"'), "ok");
+    assert.deepEqual(page.effects, ["ISOLATED:read"]);
   });
 });
 
