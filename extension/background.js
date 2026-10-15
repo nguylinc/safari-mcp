@@ -5520,6 +5520,224 @@ const _PAGE_SCRIPTS = {
 
   return "recording clicks, typing, keys, selects, submits, scrolls and in-app navigation";
 },
+  computedStyle: function computedStyle(selector, properties) {
+  var el = document.querySelector(selector);
+  if (!el) return JSON.stringify({ error: "Element not found" });
+  var styles = window.getComputedStyle(el);
+  var result = {};
+  var props = [].slice.call(styles);
+  if (properties) props = props.filter(function (p) { return properties.indexOf(p) !== -1; });
+  props.forEach(function (p) { result[p] = styles.getPropertyValue(p); });
+  return JSON.stringify(result);
+},
+  performanceMetrics: function performanceMetrics() {
+  var nav = performance.getEntriesByType("navigation")[0] || {};
+  var paint = performance.getEntriesByType("paint");
+  var fcp = paint.find(function (p) { return p.name === "first-contentful-paint"; });
+  var lcp = null;
+  try {
+    var lcps = performance.getEntriesByType("largest-contentful-paint");
+    if (lcps.length) lcp = lcps[lcps.length - 1];
+  } catch (e) {}
+  var cls = 0;
+  try {
+    performance.getEntriesByType("layout-shift").forEach(function (e) { if (!e.hadRecentInput) cls += e.value; });
+  } catch (e) {}
+  var resources = performance.getEntriesByType("resource");
+  var totalTransfer = resources.reduce(function (sum, r) { return sum + (r.transferSize || 0); }, 0);
+  return JSON.stringify({
+    navigation: {
+      dns: Math.round(nav.domainLookupEnd - nav.domainLookupStart),
+      tcp: Math.round(nav.connectEnd - nav.connectStart),
+      ttfb: Math.round(nav.responseStart - nav.requestStart),
+      download: Math.round(nav.responseEnd - nav.responseStart),
+      domInteractive: Math.round(nav.domInteractive),
+      domComplete: Math.round(nav.domComplete),
+      loadEvent: Math.round(nav.loadEventEnd),
+    },
+    webVitals: {
+      fcp: fcp ? Math.round(fcp.startTime) : null,
+      lcp: lcp ? Math.round(lcp.startTime) : null,
+      cls: Math.round(cls * 1000) / 1000,
+    },
+    resources: {
+      total: resources.length,
+      totalTransferKB: Math.round(totalTransfer / 1024),
+      byType: resources.reduce(function (acc, r) {
+        var type = r.initiatorType || "other";
+        if (!acc[type]) acc[type] = { count: 0, sizeKB: 0 };
+        acc[type].count++;
+        acc[type].sizeKB += Math.round((r.transferSize || 0) / 1024);
+        return acc;
+      }, {}),
+    },
+    memory: performance.memory ? {
+      usedMB: Math.round(performance.memory.usedJSHeapSize / 1048576),
+      totalMB: Math.round(performance.memory.totalJSHeapSize / 1048576),
+      limitMB: Math.round(performance.memory.jsHeapSizeLimit / 1048576),
+    } : null,
+  });
+},
+  extractTables: function extractTables(selector, limit) {
+  var tables = [].slice.call(document.querySelectorAll(selector || "table")).slice(0, limit);
+  var texts = function (root, sel) { return [].slice.call(root.querySelectorAll(sel)); };
+  return JSON.stringify(tables.map(function (table, ti) {
+    var headers = texts(table, "thead th, thead td, tr:first-child th").map(function (th) { return th.textContent.trim(); });
+    var rows = texts(table, "tbody tr, tr").slice(headers.length ? 0 : 1).map(function (tr) {
+      return texts(tr, "td, th").map(function (td) { return td.textContent.trim().substring(0, 200); });
+    });
+    return { index: ti, headers: headers, rows: rows.slice(0, 100), rowCount: rows.length };
+  }));
+},
+  extractMeta: function extractMeta() {
+  var all = function (sel) { return [].slice.call(document.querySelectorAll(sel)); };
+  var meta = {};
+  meta.title = document.title;
+  meta.description = (document.querySelector('meta[name="description"]') || {}).content || "";
+  meta.canonical = (document.querySelector('link[rel="canonical"]') || {}).href || "";
+  meta.robots = (document.querySelector('meta[name="robots"]') || {}).content || "";
+  meta.viewport = (document.querySelector('meta[name="viewport"]') || {}).content || "";
+  var charset = document.querySelector("meta[charset]");
+  meta.charset = (charset && charset.getAttribute("charset")) || document.characterSet;
+  meta.language = document.documentElement.lang || "";
+  meta.og = {};
+  all('meta[property^="og:"]').forEach(function (m) { meta.og[m.getAttribute("property").replace("og:", "")] = m.content; });
+  meta.twitter = {};
+  all('meta[name^="twitter:"]').forEach(function (m) { meta.twitter[m.getAttribute("name").replace("twitter:", "")] = m.content; });
+  meta.jsonLd = all('script[type="application/ld+json"]').map(function (s) {
+    try { return JSON.parse(s.textContent); } catch (e) { return null; }
+  }).filter(Boolean);
+  meta.alternateLanguages = all('link[rel="alternate"][hreflang]').map(function (l) { return { lang: l.hreflang, href: l.href }; });
+  meta.feeds = all('link[type="application/rss+xml"], link[type="application/atom+xml"]').map(function (l) {
+    return { title: l.title, href: l.href, type: l.type };
+  });
+  return JSON.stringify(meta);
+},
+  extractImages: function extractImages(limit) {
+  return JSON.stringify([].slice.call(document.querySelectorAll("img")).slice(0, limit).map(function (img) {
+    var r = img.getBoundingClientRect();
+    return {
+      src: img.src, alt: img.alt || "(missing)", width: img.naturalWidth, height: img.naturalHeight,
+      displayWidth: Math.round(r.width), displayHeight: Math.round(r.height),
+      loading: img.loading || "eager", srcset: img.srcset || "",
+      inViewport: r.top < window.innerHeight && r.bottom > 0,
+      decoded: img.complete,
+    };
+  }));
+},
+  extractLinks: function extractLinks(limit, filter) {
+  var links = [].slice.call(document.querySelectorAll("a[href]"));
+  if (filter) links = links.filter(function (a) { return a.href.includes(filter) || a.textContent.includes(filter); });
+  return JSON.stringify(links.slice(0, limit).map(function (a) {
+    return {
+      href: a.href, text: a.textContent.trim().substring(0, 100),
+      rel: a.rel || "", target: a.target || "",
+      isExternal: a.hostname !== location.hostname,
+      isNofollow: a.rel.includes("nofollow"),
+    };
+  }));
+},
+  listIndexedDBs: async function listIndexedDBs() {
+  try {
+    var dbs = await indexedDB.databases();
+    return JSON.stringify(dbs.map(function (db) { return { name: db.name, version: db.version }; }));
+  } catch (e) {
+    return JSON.stringify({ error: "indexedDB.databases() not supported, try getIndexedDB with a known db name" });
+  }
+},
+  readIndexedDB: function readIndexedDB(dbName, storeName, limit) {
+  return new Promise(function (resolve) {
+    var request = indexedDB.open(dbName);
+    request.onerror = function () { resolve(JSON.stringify({ error: "Cannot open database: " + dbName })); };
+    request.onsuccess = function (e) {
+      var db = e.target.result;
+      if (!db.objectStoreNames.contains(storeName)) {
+        resolve(JSON.stringify({ error: "Store not found: " + storeName, stores: [].slice.call(db.objectStoreNames) }));
+        db.close();
+        return;
+      }
+      var results = [];
+      var cursor = db.transaction(storeName, "readonly").objectStore(storeName).openCursor();
+      cursor.onsuccess = function (ev) {
+        var c = ev.target.result;
+        if (c && results.length < limit) { results.push({ key: c.key, value: c.value }); c.continue(); }
+        else { resolve(JSON.stringify({ database: dbName, store: storeName, count: results.length, records: results })); db.close(); }
+      };
+      cursor.onerror = function () { resolve(JSON.stringify({ error: "Cursor error" })); db.close(); };
+    };
+  });
+},
+  inspectViewport: function inspectViewport() {
+      var meta = document.querySelector('meta[name="viewport"]');
+      var content = meta ? (meta.getAttribute('content') || '') : null;
+      var attrs = {};
+      if (content) {
+        content.split(',').forEach(function(part){
+          var kv = part.split('=');
+          var key = (kv[0]||'').trim();
+          var val = (kv[1]||'').trim();
+          if (key) attrs[key] = val;
+        });
+      }
+      var issues = [];
+      if (!content) {
+        issues.push({severity:'error', message:'No viewport meta tag found. iOS Safari renders at 980px width and scales down.'});
+      } else {
+        if (!attrs.width) issues.push({severity:'error', message:'Missing width=device-width. Safari falls back to a 980px layout width.'});
+        else if (attrs.width !== 'device-width') issues.push({severity:'warning', message:'width=' + attrs.width + ' \u2014 prefer device-width for responsive layouts.'});
+        if (!attrs['initial-scale']) issues.push({severity:'warning', message:'Missing initial-scale=1. Some iOS Safari versions may not zoom correctly without it.'});
+        if (attrs['user-scalable'] === 'no' || attrs['maximum-scale'] === '1') issues.push({severity:'error', message:'Zoom disabled (user-scalable=no / maximum-scale=1) \u2014 WCAG 1.4.4 violation, and Safari 10+ ignores it anyway.'});
+        if (attrs['viewport-fit'] !== 'cover') issues.push({severity:'warning', message:'Missing viewport-fit=cover. Required for safe-area-inset env() values on notched devices.'});
+        if (attrs['minimum-scale'] && parseFloat(attrs['minimum-scale']) < 1) issues.push({severity:'info', message:'minimum-scale=' + attrs['minimum-scale'] + ' allows zoom-out on iOS, which can cause layout issues.'});
+      }
+      var errors = issues.filter(function(i){return i.severity==='error';}).length;
+      var warnings = issues.filter(function(i){return i.severity==='warning';}).length;
+      return JSON.stringify({viewport: content, attrs: attrs, ok: issues.length===0, errors: errors, warnings: warnings, issues: issues});
+},
+  checkPWA: function checkPWA() {
+      function getMeta(name){ var el = document.querySelector('meta[name="'+name+'"]'); return el ? el.getAttribute('content') : null; }
+      function getLink(rel){ var el = document.querySelector('link[rel="'+rel+'"]'); return el ? el.getAttribute('href') : null; }
+      var touchIcons = [].slice.call(document.querySelectorAll('link[rel="apple-touch-icon"]')).map(function(el){ return {sizes: el.getAttribute('sizes')||'unspecified', href: el.getAttribute('href')||''}; });
+      var splash = document.querySelectorAll('link[rel="apple-touch-startup-image"]').length;
+      var capable = getMeta('apple-mobile-web-app-capable');
+      var themeColor = getMeta('theme-color');
+      var statusBar = getMeta('apple-mobile-web-app-status-bar-style');
+      var manifest = getLink('manifest');
+      var has180 = touchIcons.some(function(i){return i.sizes==='180x180';});
+      var checks = [];
+      checks.push({pass: capable==='yes' || manifest!==null, label:'standalone launch (apple-mobile-web-app-capable or manifest)', detail: capable==='yes' ? 'apple-mobile-web-app-capable=yes' : (manifest!==null ? 'manifest linked \u2014 its display member sets standalone' : 'neither set \u2014 iOS/iPadOS 26+ still open any Home Screen site as a web app by default; iOS 18 and older open it in Safari')});
+      checks.push({pass: touchIcons.length>0, label:'apple-touch-icon', detail: touchIcons.length>0 ? (touchIcons.length+' icon(s): '+touchIcons.map(function(i){return i.sizes;}).join(', ')+(has180?'':' (missing 180x180 for iPhone)')) : 'none \u2014 iOS uses a screenshot as the icon'});
+      checks.push({pass: themeColor!==null, label:'theme-color', detail: (themeColor!==null ? ('set to '+themeColor) : 'not set') + ' \u2014 Chrome and Android color their UI with it; Safari 26+ ignores it and tints its bars from the page background'});
+      checks.push({pass: statusBar!==null, label:'apple-mobile-web-app-status-bar-style', detail: statusBar!==null ? ('set to '+statusBar) : 'not set \u2014 defaults to black-on-white'});
+      checks.push({pass: manifest!==null, label:'web app manifest', detail: manifest!==null ? ('found: '+manifest) : 'no manifest link \u2014 the Home Screen web app gets no name, id, scope or display mode of its own (Safari has no install prompt to trigger)'});
+      checks.push({pass: splash>0, label:'apple-touch-startup-image', detail: splash>0 ? (splash+' splash screen(s)') : 'none \u2014 white screen while the app loads'});
+      var passed = checks.filter(function(c){return c.pass;}).length;
+      return JSON.stringify({passed: passed, total: checks.length, checks: checks});
+},
+  analyzePage: function analyzePage() {
+  var all = function (sel) { return [].slice.call(document.querySelectorAll(sel)); };
+  var result = {};
+  result.title = document.title;
+  result.url = location.href;
+  result.meta = {};
+  result.meta.description = (document.querySelector('meta[name="description"]') || {}).content || "";
+  result.meta.canonical = (document.querySelector('link[rel="canonical"]') || {}).href || "";
+  result.meta.robots = (document.querySelector('meta[name="robots"]') || {}).content || "";
+  result.meta.og = {};
+  all('meta[property^="og:"]').forEach(function (m) { result.meta.og[m.getAttribute("property").replace("og:", "")] = m.content; });
+  result.headings = {};
+  for (var i = 1; i <= 3; i++) result.headings["h" + i] = all("h" + i).map(function (h) { return h.textContent.trim().substring(0, 100); });
+  result.links = { internal: 0, external: 0, nofollow: 0 };
+  all("a[href]").forEach(function (a) {
+    if (a.hostname === location.hostname) result.links.internal++;
+    else result.links.external++;
+    if (a.rel && a.rel.includes("nofollow")) result.links.nofollow++;
+  });
+  result.images = { total: all("img").length, withoutAlt: all('img:not([alt]),img[alt=""]').length };
+  result.forms = all("form").length;
+  result.text = document.body.innerText.substring(0, 5000);
+  return JSON.stringify(result);
+},
 };
 // page_script: each step, [name, ...args], as a compiled function in the tab's MAIN world, which the page's CSP
 // can't refuse (evaluate's script strings need eval or an inline script). Answers with the last step's value.

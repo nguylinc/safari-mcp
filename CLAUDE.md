@@ -47,6 +47,14 @@ stale. So a change to either file needs the sync and an extension rebuild (`dotf
 `index.js`) then sends the same code as one string through `evaluate`. Upstream's network tools used `runJS`,
 AppleScript's `do JavaScript`, which only reaches the profile window's front tab; it's kept as their fallback.
 
+The read-only inspection tools take that path too, with a `receipt`: `safari_get_computed_style`,
+`safari_performance_metrics`, `safari_extract_tables` / `_meta` / `_images` / `_links`, `safari_list_indexed_dbs`,
+`safari_get_indexed_db`, `safari_inspect_viewport`, `safari_check_pwa` and `safari_analyze_page` (functions in
+`page-scripts.js`; the viewport and PWA ones are `injected-validators.js`'s). Upstream ran them only through `runJS`,
+which failed with "Tab tracking lost" once the session's tab was in another window of the profile; `runJS` now also
+looks for the tab's marker in every window of the profile (`_profileWindows` in `safari.js`). An extension built
+before a page function answers "Unknown page script", and `runPageSteps` then sends it through `evaluate`.
+
 `evaluate` runs a script that isn't a valid script (a top-level `await` or `return`) as an async function's body, in
 every strategy (`_evalRunner`, content.js's bridge, command-content.js's ISOLATED fallback), and a script that doesn't
 parse answers its SyntaxError: upstream's inline-script strategy wrapped it in a plain function, so a top-level `await`
@@ -60,7 +68,8 @@ the end of the file and call it from outside the cut ranges (see the `close_tab`
 ## Tests
 
 `npm test` needs the dependencies, and `npm install` refuses on Linux (the package is darwin-only):
-`npm install --ignore-scripts --force`. A clean tree passes entirely; lint has three pre-existing errors.
+`npm install --ignore-scripts --force`. A clean tree passes entirely; lint has 20 pre-existing errors (CI gates only `no-undef`), and `npm run typecheck`
+hundreds.
 
 ## Taking an upstream update
 

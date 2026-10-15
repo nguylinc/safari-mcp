@@ -1,10 +1,12 @@
 // Injected-JS source for the iOS/WebKit validation tools. These IIFE strings are run in
 // the page via `do JavaScript` (safari.js) and are also imported directly by the test
 // suite so the exact same code is exercised under jsdom — no drift between what ships and
-// what's tested. Each is a SYNCHRONOUS IIFE returning JSON.stringify(...) (AppleScript
+// what's tested. Non-ASCII in code is written as escapes: the extension runs inspectViewport and checkPWA, and Safari
+// decodes its scripts in a legacy encoding (test/extension-source-encoding.test.mjs). Each is a SYNCHRONOUS IIFE returning JSON.stringify(...) (AppleScript
 // `do JavaScript` can't await), with no `//` comments inside (runJS flattens to one line).
 
-export const VIEWPORT_SCRIPT = `(function(){
+// inspectViewport and checkPWA are also page scripts (page-scripts.js), which the extension runs compiled in.
+export function inspectViewport() {
       var meta = document.querySelector('meta[name="viewport"]');
       var content = meta ? (meta.getAttribute('content') || '') : null;
       var attrs = {};
@@ -21,16 +23,17 @@ export const VIEWPORT_SCRIPT = `(function(){
         issues.push({severity:'error', message:'No viewport meta tag found. iOS Safari renders at 980px width and scales down.'});
       } else {
         if (!attrs.width) issues.push({severity:'error', message:'Missing width=device-width. Safari falls back to a 980px layout width.'});
-        else if (attrs.width !== 'device-width') issues.push({severity:'warning', message:'width=' + attrs.width + ' — prefer device-width for responsive layouts.'});
+        else if (attrs.width !== 'device-width') issues.push({severity:'warning', message:'width=' + attrs.width + ' \u2014 prefer device-width for responsive layouts.'});
         if (!attrs['initial-scale']) issues.push({severity:'warning', message:'Missing initial-scale=1. Some iOS Safari versions may not zoom correctly without it.'});
-        if (attrs['user-scalable'] === 'no' || attrs['maximum-scale'] === '1') issues.push({severity:'error', message:'Zoom disabled (user-scalable=no / maximum-scale=1) — WCAG 1.4.4 violation, and Safari 10+ ignores it anyway.'});
+        if (attrs['user-scalable'] === 'no' || attrs['maximum-scale'] === '1') issues.push({severity:'error', message:'Zoom disabled (user-scalable=no / maximum-scale=1) \u2014 WCAG 1.4.4 violation, and Safari 10+ ignores it anyway.'});
         if (attrs['viewport-fit'] !== 'cover') issues.push({severity:'warning', message:'Missing viewport-fit=cover. Required for safe-area-inset env() values on notched devices.'});
         if (attrs['minimum-scale'] && parseFloat(attrs['minimum-scale']) < 1) issues.push({severity:'info', message:'minimum-scale=' + attrs['minimum-scale'] + ' allows zoom-out on iOS, which can cause layout issues.'});
       }
       var errors = issues.filter(function(i){return i.severity==='error';}).length;
       var warnings = issues.filter(function(i){return i.severity==='warning';}).length;
       return JSON.stringify({viewport: content, attrs: attrs, ok: issues.length===0, errors: errors, warnings: warnings, issues: issues});
-    })()`;
+}
+export const VIEWPORT_SCRIPT = `(${inspectViewport})()`;
 
 // Safari 27 stopped listing constructable (adopted) style sheets in document.styleSheets, per
 // the CSSOM spec (Safari 27.0 release notes, 174583340). Stylesheet scans append them
@@ -63,7 +66,7 @@ export const SAFE_AREA_SCRIPT = `(function(){
       return JSON.stringify({insets: insets, viewportFitCover: viewportFitCover, usedInCSS: usedInCSS});
     })()`;
 
-export const PWA_SCRIPT = `(function(){
+export function checkPWA() {
       function getMeta(name){ var el = document.querySelector('meta[name="'+name+'"]'); return el ? el.getAttribute('content') : null; }
       function getLink(rel){ var el = document.querySelector('link[rel="'+rel+'"]'); return el ? el.getAttribute('href') : null; }
       var touchIcons = [].slice.call(document.querySelectorAll('link[rel="apple-touch-icon"]')).map(function(el){ return {sizes: el.getAttribute('sizes')||'unspecified', href: el.getAttribute('href')||''}; });
@@ -74,15 +77,16 @@ export const PWA_SCRIPT = `(function(){
       var manifest = getLink('manifest');
       var has180 = touchIcons.some(function(i){return i.sizes==='180x180';});
       var checks = [];
-      checks.push({pass: capable==='yes' || manifest!==null, label:'standalone launch (apple-mobile-web-app-capable or manifest)', detail: capable==='yes' ? 'apple-mobile-web-app-capable=yes' : (manifest!==null ? 'manifest linked — its display member sets standalone' : 'neither set — iOS/iPadOS 26+ still open any Home Screen site as a web app by default; iOS 18 and older open it in Safari')});
-      checks.push({pass: touchIcons.length>0, label:'apple-touch-icon', detail: touchIcons.length>0 ? (touchIcons.length+' icon(s): '+touchIcons.map(function(i){return i.sizes;}).join(', ')+(has180?'':' (missing 180x180 for iPhone)')) : 'none — iOS uses a screenshot as the icon'});
-      checks.push({pass: themeColor!==null, label:'theme-color', detail: (themeColor!==null ? ('set to '+themeColor) : 'not set') + ' — Chrome and Android color their UI with it; Safari 26+ ignores it and tints its bars from the page background'});
-      checks.push({pass: statusBar!==null, label:'apple-mobile-web-app-status-bar-style', detail: statusBar!==null ? ('set to '+statusBar) : 'not set — defaults to black-on-white'});
-      checks.push({pass: manifest!==null, label:'web app manifest', detail: manifest!==null ? ('found: '+manifest) : 'no manifest link — the Home Screen web app gets no name, id, scope or display mode of its own (Safari has no install prompt to trigger)'});
-      checks.push({pass: splash>0, label:'apple-touch-startup-image', detail: splash>0 ? (splash+' splash screen(s)') : 'none — white screen while the app loads'});
+      checks.push({pass: capable==='yes' || manifest!==null, label:'standalone launch (apple-mobile-web-app-capable or manifest)', detail: capable==='yes' ? 'apple-mobile-web-app-capable=yes' : (manifest!==null ? 'manifest linked \u2014 its display member sets standalone' : 'neither set \u2014 iOS/iPadOS 26+ still open any Home Screen site as a web app by default; iOS 18 and older open it in Safari')});
+      checks.push({pass: touchIcons.length>0, label:'apple-touch-icon', detail: touchIcons.length>0 ? (touchIcons.length+' icon(s): '+touchIcons.map(function(i){return i.sizes;}).join(', ')+(has180?'':' (missing 180x180 for iPhone)')) : 'none \u2014 iOS uses a screenshot as the icon'});
+      checks.push({pass: themeColor!==null, label:'theme-color', detail: (themeColor!==null ? ('set to '+themeColor) : 'not set') + ' \u2014 Chrome and Android color their UI with it; Safari 26+ ignores it and tints its bars from the page background'});
+      checks.push({pass: statusBar!==null, label:'apple-mobile-web-app-status-bar-style', detail: statusBar!==null ? ('set to '+statusBar) : 'not set \u2014 defaults to black-on-white'});
+      checks.push({pass: manifest!==null, label:'web app manifest', detail: manifest!==null ? ('found: '+manifest) : 'no manifest link \u2014 the Home Screen web app gets no name, id, scope or display mode of its own (Safari has no install prompt to trigger)'});
+      checks.push({pass: splash>0, label:'apple-touch-startup-image', detail: splash>0 ? (splash+' splash screen(s)') : 'none \u2014 white screen while the app loads'});
       var passed = checks.filter(function(c){return c.pass;}).length;
       return JSON.stringify({passed: passed, total: checks.length, checks: checks});
-    })()`;
+}
+export const PWA_SCRIPT = `(${checkPWA})()`;
 
 export const WEBKIT_COMPAT_SCRIPT = `(function(){
       ${ALL_SHEETS_FN}

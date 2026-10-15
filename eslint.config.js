@@ -25,8 +25,8 @@ export default [
   },
   {
     // mcp-helpers.js is browser-context DOM code (injected as a string).
-    // page-recorder.js and page-scripts.js are too, run as functions in the page.
-    files: ["mcp-helpers.js", "page-recorder.js", "page-scripts.js"],
+    // page-recorder.js, page-scripts.js and injected-validators.js are too, run as functions in the page.
+    files: ["mcp-helpers.js", "page-recorder.js", "page-scripts.js", "injected-validators.js"],
     languageOptions: { globals: { ...globals.browser } },
   },
   {

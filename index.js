@@ -4410,15 +4410,18 @@ server.tool(
 
 // ========== NETWORK CAPTURE (Detailed) ==========
 
-// The network and recording tools' page code (page-scripts.js) goes to the extension's page_script, which runs it as
-// compiled functions in the session's tab (an adopted one included), past the page's CSP. An extension built before
-// page_script answers "Unknown command": it gets the same code as one string through evaluate. `fallback`, AppleScript,
-// reaches only the window's front tab.
+const _RECEIPT_ARG = z.string().optional().describe("Tab receipt from safari_new_tab — pins this call to that tab (survives reconnects/subagents)");
+
+// The network, recording and read-only inspection tools' page code (page-scripts.js) goes to the extension's
+// page_script, which runs it as compiled functions in the session's tab (an adopted one included), past the page's CSP.
+// An extension built before page_script answers "Unknown command", and one built before a function "Unknown page
+// script": it gets the same code as one string through evaluate. `fallback`, AppleScript, reaches only the window's
+// front tab.
 async function runPageSteps(steps, args, fallback) {
   try {
     return await extensionOrFallback("page_script", { steps, ..._explicitReceipt(args) }, fallback);
   } catch (err) {
-    if (!/Unknown command: page_script/.test(err?.message || "")) throw err;
+    if (!/Unknown command: page_script|Unknown page script: /.test(err?.message || "")) throw err;
     return extensionOrFallback("evaluate", { script: pageScriptSource(steps), ..._explicitReceipt(args) }, fallback);
   }
 }
@@ -4499,11 +4502,8 @@ server.tool(
 server.tool(
   "safari_performance_metrics",
   "Get detailed performance metrics: navigation timing, Web Vitals (FCP, LCP, CLS), resource breakdown, memory usage",
-  {},
-  async () => {
-    const result = await safari.getPerformanceMetrics();
-    return textResult(result);
-  }
+  { receipt: _RECEIPT_ARG },
+  async (args) => textResult(await runPageSteps(safari.performanceMetricsSteps(), args, () => safari.getPerformanceMetrics()))
 );
 
 // ========== NETWORK THROTTLING ==========
@@ -4543,31 +4543,23 @@ server.tool(
   {
     selector: z.string().optional().describe("CSS selector (default: 'table')"),
     limit: z.coerce.number().optional().describe("Max tables (default: 10)"),
+    receipt: _RECEIPT_ARG,
   },
-  async (args) => {
-    const result = await safari.extractTables(args);
-    return textResult(result);
-  }
+  async (args) => textResult(await runPageSteps(safari.extractTablesSteps(args), args, () => safari.extractTables(args)))
 );
 
 server.tool(
   "safari_extract_meta",
   "Extract all meta tags: title, description, canonical, OG tags, Twitter cards, JSON-LD, alternate languages, RSS feeds",
-  {},
-  async () => {
-    const result = await safari.extractMeta();
-    return textResult(result);
-  }
+  { receipt: _RECEIPT_ARG },
+  async (args) => textResult(await runPageSteps(safari.extractMetaSteps(), args, () => safari.extractMeta()))
 );
 
 server.tool(
   "safari_extract_images",
   "Extract all images with src, alt, dimensions, loading strategy, viewport visibility",
-  { limit: z.coerce.number().optional().describe("Max images (default: 50)") },
-  async (args) => {
-    const result = await safari.extractImages(args);
-    return textResult(result);
-  }
+  { limit: z.coerce.number().optional().describe("Max images (default: 50)"), receipt: _RECEIPT_ARG },
+  async (args) => textResult(await runPageSteps(safari.extractImagesSteps(args), args, () => safari.extractImages(args)))
 );
 
 server.tool(
@@ -4576,11 +4568,9 @@ server.tool(
   {
     limit: z.coerce.number().optional().describe("Max links (default: 100)"),
     filter: z.string().optional().describe("Filter by URL or text substring"),
+    receipt: _RECEIPT_ARG,
   },
-  async (args) => {
-    const result = await safari.extractLinks(args);
-    return textResult(result);
-  }
+  async (args) => textResult(await runPageSteps(safari.extractLinksSteps(args), args, () => safari.extractLinks(args)))
 );
 
 // ========== GEOLOCATION OVERRIDE ==========
@@ -4608,11 +4598,9 @@ server.tool(
   {
     selector: z.string().describe("CSS selector"),
     properties: z.array(z.string()).optional().describe("Specific CSS properties to get (e.g. ['color', 'font-size'])"),
+    receipt: _RECEIPT_ARG,
   },
-  async (args) => {
-    const result = await safari.getComputedStyles(args);
-    return textResult(result);
-  }
+  async (args) => textResult(await runPageSteps(safari.computedStyleSteps(args), args, () => safari.getComputedStyles(args)))
 );
 
 // ========== INDEXEDDB ==========
@@ -4620,11 +4608,8 @@ server.tool(
 server.tool(
   "safari_list_indexed_dbs",
   "List all IndexedDB databases on the current page",
-  {},
-  async () => {
-    const result = await safari.listIndexedDBs();
-    return textResult(result);
-  }
+  { receipt: _RECEIPT_ARG },
+  async (args) => textResult(await runPageSteps(safari.listIndexedDBsSteps(), args, () => safari.listIndexedDBs()))
 );
 
 server.tool(
@@ -4634,11 +4619,9 @@ server.tool(
     dbName: z.string().describe("Database name"),
     storeName: z.string().describe("Object store name"),
     limit: z.coerce.number().optional().describe("Max records (default: 20)"),
+    receipt: _RECEIPT_ARG,
   },
-  async (args) => {
-    const result = await safari.getIndexedDB(args);
-    return textResult(result);
-  }
+  async (args) => textResult(await runPageSteps(safari.indexedDBSteps(args), args, () => safari.getIndexedDB(args)))
 );
 
 // ========== CSS COVERAGE ==========
@@ -4658,11 +4641,8 @@ server.tool(
 server.tool(
   "safari_inspect_viewport",
   "Validate the page's <meta name=viewport> against iOS Safari best practices: width=device-width, initial-scale, disabled-zoom (WCAG 1.4.4), viewport-fit=cover. Returns parsed attributes + severity-tagged issues (error/warning/info).",
-  {},
-  async () => {
-    const result = await safari.inspectViewport();
-    return textResult(result);
-  }
+  { receipt: _RECEIPT_ARG },
+  async (args) => textResult(await runPageSteps(safari.inspectViewportSteps(), args, () => safari.inspectViewport()))
 );
 
 server.tool(
@@ -4678,11 +4658,8 @@ server.tool(
 server.tool(
   "safari_check_pwa",
   "Audit the page for iOS 'Add to Home Screen' / PWA readiness: apple-mobile-web-app-capable, apple-touch-icon (incl. 180x180), theme-color, status-bar style, web app manifest, splash screens. Returns a pass/total checklist.",
-  {},
-  async () => {
-    const result = await safari.checkPWA();
-    return textResult(result);
-  }
+  { receipt: _RECEIPT_ARG },
+  async (args) => textResult(await runPageSteps(safari.checkPWASteps(), args, () => safari.checkPWA()))
 );
 
 server.tool(
@@ -4781,11 +4758,8 @@ server.tool(
 server.tool(
   "safari_analyze_page",
   "Full page analysis in ONE call: title, URL, meta tags, OG, headings, link stats, image stats, forms, and text preview. Perfect for SEO/audit.",
-  {},
-  async () => {
-    const result = await safari.analyzePage();
-    return textResult(result);
-  }
+  { receipt: _RECEIPT_ARG },
+  async (args) => textResult(await runPageSteps(safari.analyzePageSteps(), args, () => safari.analyzePage()))
 );
 
   // HTTP mode builds one server per session; the daily state file keeps the banner

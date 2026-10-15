@@ -1795,11 +1795,29 @@ function _foreignTabError(where, cause) {
   );
 }
 
+// Every window of the named profile (with none, every window), as `window id N`: where runJS looks for the session's
+// tab once the target window has none carrying its marker, since the extension opens or picks tabs in any of them.
+async function _profileWindows() {
+  const prefix = SAFARI_PROFILE ? `${SAFARI_PROFILE.replace(/"/g, '\\"')} —` : null;
+  const script = `tell application "Safari"
+  set out to ""
+  repeat with w in every window
+    ${prefix ? `if name of w starts with "${prefix}" then ` : ""}set out to out & (id of w as text) & ","
+  end repeat
+  return out
+end tell`;
+  try {
+    return String(await osascriptFast(script)).split(",").map(_windowById).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 // Run JavaScript in Safari — fastest path, no focus stealing
 // Uses osascriptFast (persistent process, ~5ms) for short scripts,
 // falls back to osascript (~80ms) for long scripts that exceed stdin limits
 // An explicit `tabIndex` names a tab of `win` (`window id N`) when the caller proved it there,
-// else of the target window. `elsewhere`: see _resolveSessionTab.
+// else of the target window. `elsewhere`: see _resolveSessionTab; by default every window of the profile.
 async function runJS(js, { tabIndex, win, timeout = 15000, elsewhere = null } = {}) {
   await refreshTargetWindow();
   const escaped = js
@@ -1820,7 +1838,7 @@ async function runJS(js, { tabIndex, win, timeout = 15000, elsewhere = null } = 
     // the ~100ms window in which a user tab-shift could leave it pointing at the user's tab.
     idx = _st().activeTabIndex;
   } else if (!idx && (_st().hasOwnedTab || _st().activeTabURL)) {
-    const resolved = await _resolveSessionTab({ elsewhere });
+    const resolved = await _resolveSessionTab({ elsewhere: elsewhere || _profileWindows });
     if (resolved.idx) { idx = resolved.idx; idxWin = resolved.win; _st().lastResolveTime = Date.now(); }
   }
   // A session that never owned a tab falls back to the index it tracks (usually none: the front
@@ -6230,6 +6248,21 @@ export function recordingReadSteps({ limit = 200, clear = false } = {}) {
   return [["recordingRead", Math.max(1, Math.min(2000, Number(limit) || 200)), !!clear, BODY_MAX]];
 }
 
+// The read-only inspection tools' steps (page-scripts.js), the same way.
+export const computedStyleSteps = ({ selector, properties }) =>
+  [["computedStyle", String(selector), Array.isArray(properties) ? properties.map(String) : null]];
+export const performanceMetricsSteps = () => [["performanceMetrics"]];
+export const extractTablesSteps = ({ selector, limit = 10 }) => [["extractTables", selector || null, Number(limit) || 10]];
+export const extractMetaSteps = () => [["extractMeta"]];
+export const extractImagesSteps = ({ limit = 50 }) => [["extractImages", Number(limit) || 50]];
+export const extractLinksSteps = ({ limit = 100, filter }) => [["extractLinks", Number(limit) || 100, filter || null]];
+export const listIndexedDBsSteps = () => [["listIndexedDBs"]];
+export const indexedDBSteps = ({ dbName, storeName, limit = 20 }) =>
+  [["readIndexedDB", String(dbName), String(storeName), Number(limit) || 20]];
+export const inspectViewportSteps = () => [["inspectViewport"]];
+export const checkPWASteps = () => [["checkPWA"]];
+export const analyzePageSteps = () => [["analyzePage"]];
+
 const runSteps = (steps) => runJS(pageScriptSource(steps));
 
 export async function startNetworkCapture() {
@@ -6260,57 +6293,7 @@ export async function getRecording(args = {}) {
 // ========== PERFORMANCE METRICS ==========
 
 export async function getPerformanceMetrics() {
-  return runJS(
-    `(function(){
-      var nav = performance.getEntriesByType('navigation')[0] || {};
-      var paint = performance.getEntriesByType('paint');
-      var fcp = paint.find(function(p){return p.name==='first-contentful-paint'});
-      var lcp = null;
-      try {
-        var entries = performance.getEntriesByType('largest-contentful-paint');
-        if (entries.length) lcp = entries[entries.length - 1];
-      } catch(e) {}
-      var cls = 0;
-      try {
-        var entries = performance.getEntriesByType('layout-shift');
-        entries.forEach(function(e){ if (!e.hadRecentInput) cls += e.value; });
-      } catch(e) {}
-      var resources = performance.getEntriesByType('resource');
-      var totalTransfer = resources.reduce(function(sum, r){ return sum + (r.transferSize || 0); }, 0);
-      return JSON.stringify({
-        navigation: {
-          dns: Math.round(nav.domainLookupEnd - nav.domainLookupStart),
-          tcp: Math.round(nav.connectEnd - nav.connectStart),
-          ttfb: Math.round(nav.responseStart - nav.requestStart),
-          download: Math.round(nav.responseEnd - nav.responseStart),
-          domInteractive: Math.round(nav.domInteractive),
-          domComplete: Math.round(nav.domComplete),
-          loadEvent: Math.round(nav.loadEventEnd),
-        },
-        webVitals: {
-          fcp: fcp ? Math.round(fcp.startTime) : null,
-          lcp: lcp ? Math.round(lcp.startTime) : null,
-          cls: Math.round(cls * 1000) / 1000,
-        },
-        resources: {
-          total: resources.length,
-          totalTransferKB: Math.round(totalTransfer / 1024),
-          byType: resources.reduce(function(acc, r) {
-            var type = r.initiatorType || 'other';
-            if (!acc[type]) acc[type] = { count: 0, sizeKB: 0 };
-            acc[type].count++;
-            acc[type].sizeKB += Math.round((r.transferSize || 0) / 1024);
-            return acc;
-          }, {}),
-        },
-        memory: window.performance.memory ? {
-          usedMB: Math.round(performance.memory.usedJSHeapSize / 1048576),
-          totalMB: Math.round(performance.memory.totalJSHeapSize / 1048576),
-          limitMB: Math.round(performance.memory.jsHeapSizeLimit / 1048576),
-        } : null,
-      });
-    })()`
-  );
+  return runSteps(performanceMetricsSteps());
 }
 
 // ========== NETWORK THROTTLING ==========
@@ -6367,84 +6350,20 @@ export async function getConsoleByLevel({ level }) {
 
 // ========== DATA EXTRACTION ==========
 
-export async function extractTables({ selector, limit = 10 }) {
-  const sel = selector ? `'${escJsSingleQuote(selector)}'` : "'table'";
-  return runJS(
-    `(function(){
-      var tables = [...document.querySelectorAll(${sel})].slice(0, ${Number(limit)});
-      return JSON.stringify(tables.map(function(table, ti) {
-        var headers = [...table.querySelectorAll('thead th, thead td, tr:first-child th')].map(function(th){ return th.textContent.trim(); });
-        var rows = [...table.querySelectorAll('tbody tr, tr')].slice(headers.length ? 0 : 1).map(function(tr) {
-          return [...tr.querySelectorAll('td, th')].map(function(td){ return td.textContent.trim().substring(0, 200); });
-        });
-        return { index: ti, headers: headers, rows: rows.slice(0, 100), rowCount: rows.length };
-      }));
-    })()`
-  );
+export async function extractTables(args) {
+  return runSteps(extractTablesSteps(args));
 }
 
 export async function extractMeta() {
-  return runJS(
-    `(function(){
-      var meta = {};
-      meta.title = document.title;
-      meta.description = (document.querySelector('meta[name="description"]') || {}).content || '';
-      meta.canonical = (document.querySelector('link[rel="canonical"]') || {}).href || '';
-      meta.robots = (document.querySelector('meta[name="robots"]') || {}).content || '';
-      meta.viewport = (document.querySelector('meta[name="viewport"]') || {}).content || '';
-      meta.charset = (document.querySelector('meta[charset]') || {}).getAttribute('charset') || document.characterSet;
-      meta.language = document.documentElement.lang || '';
-      meta.og = {};
-      document.querySelectorAll('meta[property^="og:"]').forEach(function(m) {
-        meta.og[m.getAttribute('property').replace('og:','')] = m.content;
-      });
-      meta.twitter = {};
-      document.querySelectorAll('meta[name^="twitter:"]').forEach(function(m) {
-        meta.twitter[m.getAttribute('name').replace('twitter:','')] = m.content;
-      });
-      meta.jsonLd = [...document.querySelectorAll('script[type="application/ld+json"]')].map(function(s) {
-        try { return JSON.parse(s.textContent); } catch(e) { return null; }
-      }).filter(Boolean);
-      meta.alternateLanguages = [...document.querySelectorAll('link[rel="alternate"][hreflang]')].map(function(l) {
-        return { lang: l.hreflang, href: l.href };
-      });
-      meta.feeds = [...document.querySelectorAll('link[type="application/rss+xml"], link[type="application/atom+xml"]')].map(function(l) {
-        return { title: l.title, href: l.href, type: l.type };
-      });
-      return JSON.stringify(meta);
-    })()`
-  );
+  return runSteps(extractMetaSteps());
 }
 
-export async function extractImages({ limit = 50 }) {
-  return runJS(
-    `JSON.stringify([...document.querySelectorAll('img')].slice(0,${Number(limit)}).map(function(img){
-      var r = img.getBoundingClientRect();
-      return {
-        src: img.src, alt: img.alt || '(missing)', width: img.naturalWidth, height: img.naturalHeight,
-        displayWidth: Math.round(r.width), displayHeight: Math.round(r.height),
-        loading: img.loading || 'eager', srcset: img.srcset || '',
-        inViewport: r.top < window.innerHeight && r.bottom > 0,
-        decoded: img.complete,
-      };
-    }))`
-  );
+export async function extractImages(args) {
+  return runSteps(extractImagesSteps(args));
 }
 
-export async function extractLinks({ limit = 100, filter }) {
-  const filterStr = filter
-    ? `.filter(function(a){return a.href.includes('${escJsSingleQuote(filter)}')||a.textContent.includes('${escJsSingleQuote(filter)}')})`
-    : "";
-  return runJS(
-    `JSON.stringify([...document.querySelectorAll('a[href]')]${filterStr}.slice(0,${Number(limit)}).map(function(a){
-      return {
-        href: a.href, text: a.textContent.trim().substring(0,100),
-        rel: a.rel || '', target: a.target || '',
-        isExternal: a.hostname !== location.hostname,
-        isNofollow: a.rel.includes('nofollow'),
-      };
-    }))`
-  );
+export async function extractLinks(args) {
+  return runSteps(extractLinksSteps(args));
 }
 
 // ========== GEOLOCATION OVERRIDE ==========
@@ -6464,68 +6383,19 @@ export async function overrideGeolocation({ latitude, longitude, accuracy = 100 
 
 // ========== COMPUTED STYLES ==========
 
-export async function getComputedStyles({ selector, properties }) {
-  const sel = escJsSingleQuote(selector);
-  const propsFilter = properties
-    ? `.filter(function(p){return [${properties.map((p) => `'${String(p).replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`).join(",")}].includes(p)})`
-    : "";
-  return runJS(
-    `(function(){
-      var el = document.querySelector('${sel}');
-      if (!el) return JSON.stringify({ error: 'Element not found' });
-      var styles = window.getComputedStyle(el);
-      var result = {};
-      var props = [...styles]${propsFilter};
-      props.forEach(function(p) { result[p] = styles.getPropertyValue(p); });
-      return JSON.stringify(result);
-    })()`
-  );
+export async function getComputedStyles(args) {
+  return runSteps(computedStyleSteps(args));
 }
 
 // ========== INDEXEDDB ==========
 
-export async function getIndexedDB({ dbName, storeName, limit = 20 }) {
-  const safeDb = escJsSingleQuote(dbName);
-  const safeStore = escJsSingleQuote(storeName);
-  // `do JavaScript` can't await a Promise — route async work through the Node-side poller.
-  return _evaluateAsync(
-    `(async function(){
-      return new Promise(function(resolve, reject) {
-        var request = indexedDB.open('${safeDb}');
-        request.onerror = function() { resolve(JSON.stringify({ error: 'Cannot open database: ${safeDb}' })); };
-        request.onsuccess = function(e) {
-          var db = e.target.result;
-          if (!db.objectStoreNames.contains('${safeStore}')) {
-            resolve(JSON.stringify({ error: 'Store not found: ${safeStore}', stores: [...db.objectStoreNames] }));
-            db.close(); return;
-          }
-          var tx = db.transaction('${safeStore}', 'readonly');
-          var store = tx.objectStore('${safeStore}');
-          var results = [];
-          var cursor = store.openCursor();
-          cursor.onsuccess = function(e) {
-            var c = e.target.result;
-            if (c && results.length < ${Number(limit)}) { results.push({ key: c.key, value: c.value }); c.continue(); }
-            else { resolve(JSON.stringify({ database: '${safeDb}', store: '${safeStore}', count: results.length, records: results })); db.close(); }
-          };
-          cursor.onerror = function() { resolve(JSON.stringify({ error: 'Cursor error' })); db.close(); };
-        };
-      });
-    })()`
-  );
+// `do JavaScript` can't await a Promise — route async work through the Node-side poller.
+export async function getIndexedDB(args) {
+  return _evaluateAsync(pageScriptSource(indexedDBSteps(args)));
 }
 
 export async function listIndexedDBs() {
-  return _evaluateAsync(
-    `(async function(){
-      try {
-        var dbs = await indexedDB.databases();
-        return JSON.stringify(dbs.map(function(db){ return { name: db.name, version: db.version }; }));
-      } catch(e) {
-        return JSON.stringify({ error: 'indexedDB.databases() not supported, try getIndexedDB with a known db name' });
-      }
-    })()`
-  );
+  return _evaluateAsync(pageScriptSource(listIndexedDBsSteps()));
 }
 
 // ========== CSS COVERAGE ==========
@@ -6911,31 +6781,7 @@ export async function fillAndSubmit({ fields, submitSelector }) {
 
 // Full page analysis — extracts everything in ONE call
 export async function analyzePage() {
-  return runJS(
-    `(function(){
-      var result = {};
-      result.title = document.title;
-      result.url = location.href;
-      result.meta = {};
-      result.meta.description = (document.querySelector('meta[name="description"]')||{}).content||'';
-      result.meta.canonical = (document.querySelector('link[rel="canonical"]')||{}).href||'';
-      result.meta.robots = (document.querySelector('meta[name="robots"]')||{}).content||'';
-      result.meta.og = {};
-      document.querySelectorAll('meta[property^="og:"]').forEach(function(m){result.meta.og[m.getAttribute('property').replace('og:','')]=m.content;});
-      result.headings = {};
-      for(var i=1;i<=3;i++){result.headings['h'+i]=[...document.querySelectorAll('h'+i)].map(function(h){return h.textContent.trim().substring(0,100);});}
-      result.links = {internal:0,external:0,nofollow:0};
-      document.querySelectorAll('a[href]').forEach(function(a){
-        if(a.hostname===location.hostname)result.links.internal++;
-        else result.links.external++;
-        if(a.rel&&a.rel.includes('nofollow'))result.links.nofollow++;
-      });
-      result.images = {total:document.querySelectorAll('img').length,withoutAlt:[...document.querySelectorAll('img:not([alt]),img[alt=""]')].length};
-      result.forms = document.querySelectorAll('form').length;
-      result.text = document.body.innerText.substring(0,5000);
-      return JSON.stringify(result);
-    })()`
-  );
+  return runSteps(analyzePageSteps());
 }
 
 // ========== GRACEFUL SHUTDOWN ==========
